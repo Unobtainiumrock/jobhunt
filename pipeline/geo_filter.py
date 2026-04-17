@@ -346,6 +346,18 @@ def apply_verdict(convo: dict[str, Any], verdict: GeoVerdict) -> bool:
     breakdown = score.get("breakdown") or {}
 
     if verdict.verdict == "incompatible":
+        # Snapshot pre-geo values on the FIRST demotion so we can restore
+        # them cleanly if the verdict later flips (e.g., recruiter
+        # clarifies, or we reclassify no-region on-site as
+        # needs_clarification). Never overwrite an existing snapshot.
+        if "_pre_geo" not in score and score:
+            score["_pre_geo"] = {
+                "total": score.get("total"),
+                "action": score.get("action"),
+                "logistics_fit": breakdown.get("logistics_fit"),
+                "gaps": list(score.get("gaps") or []),
+            }
+            mutated = True
         if breakdown.get("logistics_fit", 0) != 0:
             breakdown["logistics_fit"] = 0
             mutated = True
@@ -396,6 +408,29 @@ def apply_verdict(convo: dict[str, Any], verdict: GeoVerdict) -> bool:
             intent["abstain"] = False
             intent["abstain_reason"] = None
             convo["intent"] = intent
+            mutated = True
+        # Roll back prior demotion if we snapshotted the pre-geo score.
+        score = convo.get("score") or {}
+        snapshot = score.get("_pre_geo")
+        if snapshot:
+            score["total"] = snapshot.get("total", score.get("total"))
+            score["action"] = snapshot.get("action", score.get("action"))
+            breakdown = score.get("breakdown") or {}
+            if snapshot.get("logistics_fit") is not None:
+                breakdown["logistics_fit"] = snapshot["logistics_fit"]
+                score["breakdown"] = breakdown
+            if snapshot.get("gaps") is not None:
+                score["gaps"] = list(snapshot["gaps"])
+            score.pop("_pre_geo", None)
+            convo["score"] = score
+            mutated = True
+        # Drop any lingering geo_incompatible gap note that never got
+        # snapshotted (legacy rows from before this change).
+        gaps = list(score.get("gaps") or [])
+        cleaned = [g for g in gaps if not str(g).startswith("geo_incompatible:")]
+        if cleaned != gaps:
+            score["gaps"] = cleaned
+            convo["score"] = score
             mutated = True
         # Same for a pending reply that was marked abstained by an earlier
         # run of this filter. Re-open it so the generator can re-draft
