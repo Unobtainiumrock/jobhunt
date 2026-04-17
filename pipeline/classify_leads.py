@@ -332,11 +332,40 @@ async def classify_all(reclassify: bool = False) -> None:
         elapsed = time.time() - t0
         print(f"  Extracted metadata for {len(recruiter_convos)} conversations in {elapsed:.1f}s")
 
+    # Preserve enrichment fields written by later pipeline stages so that
+    # re-classifying an inbox does not clobber drafts, stage machine output,
+    # intent tags, etc. ``_SCRAPE_FIELDS`` is the set of fields owned by the
+    # raw scrape + classifier; everything else in ``existing[urn]`` is
+    # downstream enrichment and must be carried forward verbatim unless the
+    # fresh ``convo`` already provides a newer value for that key.
+    _SCRAPE_FIELDS = {
+        "conversationUrn",
+        "participants",
+        "lastActivityAt",
+        "createdAt",
+        "unreadCount",
+        "read",
+        "title",
+        "lastMessagePreview",
+        "messages",
+        "classification",
+        "metadata",
+        "_duplicate_of",
+        "_category_override",
+        "_dedupe_reason",
+    }
     for convo in conversations:
         urn = convo["conversationUrn"]
-        if urn in existing and "classification" not in convo:
-            convo["classification"] = existing[urn].get("classification")
-            convo["metadata"] = existing[urn].get("metadata")
+        prev = existing.get(urn)
+        if not prev:
+            continue
+        if "classification" not in convo:
+            convo["classification"] = prev.get("classification")
+            convo["metadata"] = prev.get("metadata")
+        for key, value in prev.items():
+            if key in _SCRAPE_FIELDS:
+                continue
+            convo.setdefault(key, value)
 
     output = {
         "classifiedAt": datetime.now(timezone.utc).isoformat(),
