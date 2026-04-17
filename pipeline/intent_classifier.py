@@ -243,6 +243,7 @@ async def classify_intents(
 
     if not candidates:
         print("No intents to classify -- cache hit for every recruiter thread.")
+        _latch_declined(conversations)
         return
 
     chosen_model = model or FAST_MODEL
