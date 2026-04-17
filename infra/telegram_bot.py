@@ -139,8 +139,8 @@ def cmd_help() -> str:
         "/approve &lt;token&gt; - mark draft approved\n"
         "/reject &lt;token&gt; - mark draft rejected\n"
         "/help - this message\n\n"
-        "<i>Tokens are the short prefixes shown by /list. Live sends require\n"
-        "LINKEDIN_SEND_ENABLED=1 on the server (same as the review UI).</i>"
+        "<i>Tokens are the short prefixes shown by /list. Live sends are on\n"
+        "by default; set LINKEDIN_SEND_ENABLED=0 in `.env` to pause dispatch.</i>"
     )
 
 

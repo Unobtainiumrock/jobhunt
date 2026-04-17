@@ -1202,7 +1202,7 @@ def _spawn_send_approved(
     # Dry runs are always allowed so operators can rehearse without risk.
     if not dry_run and not env_truthy("LINKEDIN_SEND_ENABLED", default=False):
         raise RuntimeError(
-            "Live sending disabled (set LINKEDIN_SEND_ENABLED=1 on the review service to enable)"
+            "Live sending disabled (LINKEDIN_SEND_ENABLED=0 in env; set to 1 or remove to allow)"
         )
 
     with _send_state_lock:

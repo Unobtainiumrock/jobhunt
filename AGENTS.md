@@ -55,12 +55,12 @@ State lives in three named volumes: `app-data`, `chrome-profile`,
 
 ## Safety rails already in the code (don't weaken these silently)
 
-- `LINKEDIN_SEND_ENABLED` in `.env` gates live sends. Default: `0`
-  (dry-run only). Flip to `1` only after you trust the draft quality. When
-  `1`, approving a reply or follow-up (web UI or Telegram `/approve`)
-  immediately runs the LinkedIn sender for that thread (same `send-approved`
-  pipeline as the bulk button, serialized via `data/.send_approved.lock`).
-  With `0`, approve still persists JSON but never dispatches.
+- `LINKEDIN_SEND_ENABLED` in `.env` can pause live sends. Compose defaults to
+  `1` (real sends on). Set `0` in `.env` to dry-run only: approve still saves
+  JSON but nothing dispatches. When `1`, approving a reply or follow-up (web
+  UI or Telegram `/approve`) immediately runs the LinkedIn sender for that
+  thread (same `send-approved` pipeline as the bulk button, serialized via
+  `data/.send_approved.lock`).
 - `SENDER_RATE_LIMIT` caps sends/hour. Translated automatically into
   per-run delay envs by `pipeline/send_approved_exec.py` (used by both the
   review server and the Telegram bot).
@@ -85,7 +85,8 @@ State lives in three named volumes: `app-data`, `chrome-profile`,
 ## Out-of-scope without explicit user approval
 
 - Rotating the Caddy basic-auth creds or VNC password.
-- Flipping `LINKEDIN_SEND_ENABLED` from `0` to `1`.
+- Changing `LINKEDIN_SEND_ENABLED` without you asking (pause vs live is your
+  operational knob).
 - Setting up a GitHub Actions auto-deploy (requires storing an SSH key
   as a repo secret — security tradeoff owner should decide).
 - Deleting, rotating, or revoking the Hetzner deploy key (`hetzner-deploy-*`

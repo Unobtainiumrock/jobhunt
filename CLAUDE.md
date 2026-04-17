@@ -23,8 +23,8 @@ It is idempotent and safe to re-run.
 - `rsync` / `scp` app code to Hetzner (retired path).
 - Edit files directly on `/opt/linkedin-leads` over SSH (next `git pull`
   creates a working-tree conflict). Push through GitHub.
-- Flip `LINKEDIN_SEND_ENABLED=1`, rotate VNC/Caddy passwords, or set up
-  GitHub Actions auto-deploy without the user explicitly approving.
+- Rotate VNC/Caddy passwords or set up GitHub Actions auto-deploy without the
+  user explicitly approving.
 
 ## Where things live
 

@@ -27,8 +27,8 @@ It is idempotent and safe to re-run.
   will clobber them with a tree-conflict). Push through GitHub instead.
 - Weaken the safety rails (`LINKEDIN_SEND_ENABLED` gate,
   `SENDER_RATE_LIMIT`, follow-up cap of 2, abstain-on-dead-end logic)
-  without explicit user approval. When sends are enabled, Approve (web or
-  Telegram) dispatches immediately; keep the gate at `0` until you mean it.
+  without explicit user approval. Compose defaults live sends on; use
+  `LINKEDIN_SEND_ENABLED=0` in `.env` only when you intentionally want dry-run.
 
 ## Remember
 

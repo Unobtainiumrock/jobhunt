@@ -109,9 +109,8 @@ VNC_PASSWORD=<pick something strong>
 HEALTH_TELEGRAM_BOT_TOKEN=7123456789:AAH...
 HEALTH_TELEGRAM_CHAT_ID=123456789
 
-# Approved-sender gating. Keep =0 until you've verified drafts in the UI.
-# Flip to 1 to let "Send Approved (live)" actually dispatch.
-LINKEDIN_SEND_ENABLED=0
+# Live sends: default in docker-compose is 1. Set =0 only to force dry-run.
+LINKEDIN_SEND_ENABLED=1
 # Soft cap on outbound sends per hour (translated into per-run delays).
 SENDER_RATE_LIMIT=12
 ```
@@ -199,8 +198,8 @@ crontab -e        # paste the three lines
 Then:
 
 ```bash
-# flip the live-send gate on once you're comfortable
-sed -i 's/^LINKEDIN_SEND_ENABLED=.*/LINKEDIN_SEND_ENABLED=1/' .env
+# Live sends default to on; only run this if you had set the gate to 0:
+# sed -i 's/^LINKEDIN_SEND_ENABLED=.*/LINKEDIN_SEND_ENABLED=1/' .env
 docker compose up -d
 ```
 
