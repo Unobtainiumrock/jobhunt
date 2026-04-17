@@ -37,4 +37,11 @@ It is idempotent and safe to re-run.
   for its own rules. Use `mcp_priority-forge_*` tools when available, else
   the REST API.
 
+## When something breaks or feels stuck
+
+Production is on Hetzner (`hetzner`, `/opt/linkedin-leads`). Read **`AGENTS.md` →
+“When something breaks or feels stuck (operator playbook)”** for the full
+symptom → action table (session/VNC, sends gate, stale inbox, logs, pause
+sends, deploy drift).
+
 For everything else, read `AGENTS.md`.

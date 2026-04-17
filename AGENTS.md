@@ -82,6 +82,23 @@ State lives in three named volumes: `app-data`, `chrome-profile`,
 - OpenAI 429: check project-level spending limit in the OpenAI dashboard
   for the `pre-commit-hooks` project, not just the org balance.
 
+## When something breaks or feels stuck (operator playbook)
+
+Use Hetzner, repo path `/opt/linkedin-leads`, `docker compose -f
+/opt/linkedin-leads/docker-compose.yml` (or `cd /opt/linkedin-leads && docker
+compose`) unless you are debugging locally.
+
+| Symptom | What to do |
+|---------|------------|
+| **LinkedIn session expired / send failures / auth wall** | Telegram often surfaces this. Open VNC (`https://vnc.178-104-92-205.sslip.io/`, creds in `.env`), re-login in Chrome; session persists in `chrome-profile` volume. Retry approve or bulk send after. |
+| **Review UI unreachable** | `ssh hetzner 'cd /opt/linkedin-leads && docker compose logs --tail=80 review'`. Confirm Caddy on host; confirm `review` binds `127.0.0.1:3457` on the VM. |
+| **Telegram `/status` or `/list` looks empty / “no drafts”** | Usually `inbox_classified.json` lost enrichment (`reply`, `stage`, `intent_tag`) on a bad classify merge — see “Telegram bot says no drafts” above. Confirm `telegram_bot` and `review` share `app-data` volume and restarted after deploy. |
+| **Approves do not hit LinkedIn** | `docker compose exec -T review printenv LINKEDIN_SEND_ENABLED` — expect `1`. If `0`, set in `/opt/linkedin-leads/.env`, then `docker compose up -d review telegram_bot`. Another send may be holding `data/.send_approved.lock` (wait for in-flight send, or check stuck `send-approved` / Chrome). |
+| **Pause all outbound (keep reviewing)** | Set `LINKEDIN_SEND_ENABLED=0` in `.env` (laptop + Hetzner), `scp` if needed, then `docker compose up -d review telegram_bot` (or `./bin/deploy`). |
+| **Data feels stale (you replied on LinkedIn but drafts disagree)** | Force refresh: `docker compose exec -T listener npm run inbox` (or wait for cron scrape). Then pipeline: `docker compose exec -T listener npm run pipeline` (or cron). `generate_reply --purge-stale` runs after pipeline in `infra/cron.sh`. |
+| **Pipeline / scrape errors** | `docker compose logs --tail=100 listener` and host logs under `/var/log/linkedin-leads/` from `infra/cron.sh`. OpenAI 429 → project spend limit (see above). Missing profile → `profile/user_profile.yaml` on server and in image context. |
+| **Code fix shipped but prod unchanged** | You only pushed: run `./bin/deploy`. You only edited on server: stop — push via GitHub, then `./bin/deploy`. |
+
 ## Out-of-scope without explicit user approval
 
 - Rotating the Caddy basic-auth creds or VNC password.

@@ -36,4 +36,5 @@ It is idempotent and safe to re-run.
   Hetzner are hand-synced with `scp` when values change.
 - `profile/user_profile.yaml` is gitignored but MUST exist on Hetzner
   or `score_leads` crashes. If missing: `scp` it over, then rebuild.
-- See `AGENTS.md` at repo root for full project context.
+- See `AGENTS.md` at repo root for full project context (including **“When
+  something breaks or feels stuck”** — symptom → fix playbook for operators).
