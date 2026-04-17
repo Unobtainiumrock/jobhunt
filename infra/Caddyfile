@@ -20,3 +20,11 @@ vnc.{$DOMAIN} {
 	}
 	reverse_proxy localhost:6080
 }
+
+# Mobile swipe review UI (Telegram WebApp).
+# Auth is enforced *inside* the app by verifying Telegram's signed initData
+# payload (infra/telegram_auth.py); Basic auth would break the WebApp since
+# Telegram's in-app WebView cannot handle auth prompts. Do not add basicauth.
+m.{$DOMAIN} {
+	reverse_proxy localhost:3457
+}

@@ -32,8 +32,13 @@ It is idempotent and safe to re-run.
   `scp`). Comments in the file document each key.
 - Runtime state: Docker volumes on Hetzner (`app-data`, `chrome-profile`,
   `qdrant-storage`). They survive `docker compose up -d --build`.
+- Public HTTPS: Caddy on the Hetzner host fronts three subdomains on
+  `sslip.io` — `review.` (basic auth), `vnc.` (basic auth), `m.`
+  (Telegram `initData` auth for the mobile swipe UI). Full table in
+  `AGENTS.md` → **Public HTTPS & auth**.
 - Task tracking: Priority Forge at `http://127.0.0.1:3456` (project:
-  `job-hunt`). See `/home/unobtainium/Desktop/github/priority-forge/CLAUDE.md`
+  `linkedin-leads` for this repo's work, `job-hunt` for umbrella career
+  tasks). See `/home/unobtainium/Desktop/github/priority-forge/CLAUDE.md`
   for its own rules. Use `mcp_priority-forge_*` tools when available, else
   the REST API.
 

@@ -28,12 +28,36 @@ yourself writing `scp` or `rsync` for app code, stop and use `./bin/deploy`.
 
 Docker Compose stack on Hetzner: `desktop` (Xfce + Chrome + noVNC for
 LinkedIn session), `listener` (Node scraper + pipeline runner), `review`
-(Flask approval UI, mobile-responsive), `telegram_bot` (phone control
+(approval UI + mobile swipe UI), `telegram_bot` (phone control
 surface), `qdrant` (vector DB), `healthdog` (Telegram alerter). Caddy
-runs on the host (not in Compose) and terminates HTTPS + basic-auth for
-`review.178-104-92-205.sslip.io` and `vnc.178-104-92-205.sslip.io`.
-State lives in three named volumes: `app-data`, `chrome-profile`,
-`qdrant-storage`. These survive rebuilds.
+runs on the host (not in Compose) and terminates HTTPS for three
+subdomains. State lives in three named volumes: `app-data`,
+`chrome-profile`, `qdrant-storage`. These survive rebuilds.
+
+## Public HTTPS & auth
+
+Three Caddy virtual hosts. All auto-provision Let's Encrypt certs on
+first hit. `sslip.io` gives us free wildcard DNS without owning a
+domain — the pattern `A-B-C-D.sslip.io` maps to `A.B.C.D`. Base host
+on prod: `178-104-92-205.sslip.io`.
+
+| Subdomain | Port | Auth                    | Purpose                  |
+|-----------|------|-------------------------|--------------------------|
+| `review.` | 3457 | HTTP basic auth         | Desktop review UI        |
+| `vnc.`    | 6080 | HTTP basic auth         | noVNC for Chrome session |
+| `m.`      | 3457 | Telegram `initData` HMAC | Mobile swipe UI (WebApp) |
+
+`m.` **must not** have basic auth — Telegram's in-app WebView cannot
+handle auth prompts. Auth is enforced inside the app by
+`infra/telegram_auth.py::verify_init_data`, which validates the
+HMAC-SHA256 signature, freshness (`auth_date` < 1h), and that
+`user.id == HEALTH_TELEGRAM_CHAT_ID`. Changing the chat id revokes
+mobile access.
+
+Rotation: edit `/etc/caddy/Caddyfile` on the host, `sudo systemctl
+reload caddy`. Basic auth hash: `caddy hash-password --plaintext <pw>`.
+Bot / WebApp registration: BotFather → `/mybots` → `Bot Settings` →
+`Menu Button` → paste `https://m.<host>/m/`.
 
 ## Files you should NOT commit (gitignored, stay local/Hetzner-only)
 

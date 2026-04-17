@@ -58,9 +58,21 @@ from pipeline.send_approved_exec import (
     env_truthy,
     run_send_approved_with_lock,
 )
+from infra.telegram_auth import verify_init_data
 
 DEFAULT_PORT = 3457
 SEND_HISTORY_FILE = DATA_DIR / "send_history.jsonl"
+MOBILE_TEMPLATE_FILE = Path(__file__).resolve().parent / "mobile_template.html"
+
+
+def _load_mobile_html() -> str:
+    if not MOBILE_TEMPLATE_FILE.exists():
+        return "<!-- mobile_template.html missing -->"
+    return MOBILE_TEMPLATE_FILE.read_text()
+
+
+MOBILE_HTML = _load_mobile_html()
+MOBILE_DRAFT_STATUSES = {"draft", "auto_send"}
 
 _send_state_lock = threading.Lock()
 _send_state: dict[str, Any] = {
@@ -1470,6 +1482,11 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._serve_followups()
         elif self.path == "/api/send/status":
             self._serve_send_status()
+        elif self.path == "/m/" or self.path == "/m":
+            self._serve_mobile_html()
+        elif self.path.startswith("/m/api/drafts"):
+            if self._verify_mobile():
+                self._serve_mobile_drafts()
         else:
             self.send_error(404)
 
@@ -1482,8 +1499,46 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._handle_followup_action()
         elif self.path == "/api/send":
             self._handle_send_action()
+        elif self.path == "/m/api/action":
+            if self._verify_mobile():
+                self._handle_reply_action()
         else:
             self.send_error(404)
+
+    def _verify_mobile(self) -> bool:
+        """Gate `/m/api/*` behind a valid Telegram WebApp initData payload.
+
+        Accepts the signed payload via either the ``X-Telegram-Init-Data``
+        request header or an ``initData`` query-string parameter (useful for
+        GETs from a plain browser session during local debugging). Writes a
+        401 on failure and returns False so the caller can short-circuit.
+        """
+        init_data = self.headers.get("X-Telegram-Init-Data", "").strip()
+        if not init_data and "?" in self.path:
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            init_data = (qs.get("initData") or [""])[0]
+        if verify_init_data(init_data) is not None:
+            return True
+        self._write_json(401, {"ok": False, "error": "unauthorized"})
+        return False
+
+    def _serve_mobile_html(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(MOBILE_HTML.encode())
+
+    def _serve_mobile_drafts(self) -> None:
+        data = self._load_classified_data()
+        conversations = data.get("conversations", [])
+        drafts = [
+            c for c in conversations
+            if c.get("classification", {}).get("category") == "recruiter"
+            and (c.get("reply") or {}).get("status") in MOBILE_DRAFT_STATUSES
+        ]
+        drafts.sort(key=_reply_sort_key, reverse=True)
+        self._write_json(200, drafts)
 
     def _serve_html(self) -> None:
         self.send_response(200)

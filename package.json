@@ -55,7 +55,9 @@
     "trial:create": "python -m lib.trial_manager --create",
     "health": "python infra/healthcheck.py",
     "health:watch": "python infra/healthcheck.py --watch",
-    "pipeline": "python -m pipeline.dedupe_threads && python -m pipeline.classify_leads && python -m pipeline.embed_conversations && python -m pipeline.score_leads && python -m pipeline.email_ingest && python -m pipeline.intent_classifier && python -m pipeline.generate_reply && python -m pipeline.export_csv"
+    "push:drafts": "python -m pipeline.push_drafts",
+    "push:drafts:dry-run": "python -m pipeline.push_drafts --dry-run",
+    "pipeline": "python -m pipeline.dedupe_threads && python -m pipeline.classify_leads && python -m pipeline.embed_conversations && python -m pipeline.score_leads && python -m pipeline.email_ingest && python -m pipeline.intent_classifier && python -m pipeline.generate_reply && python -m pipeline.push_drafts && python -m pipeline.export_csv"
   },
   "dependencies": {
     "ws": "^8.18.0"
