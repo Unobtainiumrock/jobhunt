@@ -492,9 +492,32 @@ async def generate_reply_body(
         stage = derive_conversation_stage(convo)
         convo["stage"] = stage
 
+        # Geo clarification: recruiter said on-site/hybrid but never stated a
+        # region. Don't abstain (might be Bay), don't schedule yet -- just
+        # ask where the role is based before anything else.
+        geo = convo.get("geo") or {}
+        ask_location = bool(geo.get("ask_location"))
+        geo_context = ""
+        if ask_location:
+            geo_context = (
+                "===GEO CLARIFICATION (HIGHEST PRIORITY)===\n"
+                "The recruiter stated the role is "
+                f"{geo.get('work_mode') or 'on-site/hybrid'} but never said "
+                "where. Your reply MUST open by briefly asking where the role "
+                f"is based (what city/metro). {USER_NAME} is based in the SF "
+                "Bay Area and cannot commit to logistics without knowing the "
+                "location. Keep the location question short (one sentence). "
+                "Do NOT offer calendar slots, do NOT send the resume, do NOT "
+                "commit to compensation yet. After the question, one sentence "
+                "acknowledging their role pitch is fine.\n"
+                "===END GEO CLARIFICATION===\n"
+            )
+
         scheduling_block = ""
         proposed_slots: list[dict[str, Any]] = []
-        if stage == "ready_to_schedule":
+        # Skip scheduling entirely if we still need to confirm location --
+        # offering slots before knowing the city wastes a turn.
+        if stage == "ready_to_schedule" and not ask_location:
             try:
                 from agents.calendar_agent import propose_slots
                 proposed_slots = propose_slots(duration_minutes=30, window_days=5)
@@ -539,7 +562,7 @@ async def generate_reply_body(
             user_name=USER_NAME,
             highlights=", ".join(highlights),
             tone=tone,
-        ) + f"\n\n{recruiter_context}\n\n{scheduling_block}\n\n{retrieval_context}\n\n{conversation_context}"
+        ) + f"\n\n{geo_context}\n\n{recruiter_context}\n\n{scheduling_block}\n\n{retrieval_context}\n\n{conversation_context}"
 
         try:
             resp = await client.chat.completions.create(

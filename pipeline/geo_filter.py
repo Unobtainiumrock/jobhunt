@@ -39,7 +39,7 @@ from pipeline.config import (
 )
 
 WorkMode = Literal["remote", "hybrid", "on_site", "unknown"]
-Verdict = Literal["compatible", "incompatible", "unknown"]
+Verdict = Literal["compatible", "incompatible", "unknown", "needs_clarification"]
 
 _REMOTE_TOKENS = (
     "fully remote",
@@ -123,6 +123,7 @@ class GeoVerdict:
     location_text: str
     matched_allowed: list[str] = field(default_factory=list)
     matched_blocked: list[str] = field(default_factory=list)
+    ask_location: bool = False
     evaluated_at: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -133,6 +134,7 @@ class GeoVerdict:
             "location_text": self.location_text,
             "matched_allowed": self.matched_allowed,
             "matched_blocked": self.matched_blocked,
+            "ask_location": self.ask_location,
             "evaluated_at": self.evaluated_at,
         }
 
@@ -269,13 +271,16 @@ def evaluate_convo(convo: dict[str, Any], policy: GeoPolicy) -> GeoVerdict:
                 matched_blocked=blocked_hits,
                 evaluated_at=now,
             )
+        # Hybrid with no region token -- could be Bay, could be elsewhere.
+        # Don't veto; ask the recruiter before committing to a stance.
         return GeoVerdict(
-            verdict="incompatible",
+            verdict="needs_clarification",
             work_mode="hybrid",
-            reason="hybrid role with no allowed-region token present",
+            reason="hybrid role but recruiter did not state a region",
             location_text=loc_field,
             matched_allowed=allowed_hits,
             matched_blocked=blocked_hits,
+            ask_location=True,
             evaluated_at=now,
         )
 
@@ -290,13 +295,16 @@ def evaluate_convo(convo: dict[str, Any], policy: GeoPolicy) -> GeoVerdict:
                 matched_blocked=blocked_hits,
                 evaluated_at=now,
             )
+        # On-site with no region token -- same treatment as hybrid unknown.
+        # Could legitimately be SF; don't pre-block, just ask.
         return GeoVerdict(
-            verdict="incompatible",
+            verdict="needs_clarification",
             work_mode="on_site",
-            reason="on-site with no allowed-region token",
+            reason="on-site role but recruiter did not state a region",
             location_text=loc_field,
             matched_allowed=allowed_hits,
             matched_blocked=blocked_hits,
+            ask_location=True,
             evaluated_at=now,
         )
 
@@ -380,10 +388,31 @@ def apply_verdict(convo: dict[str, Any], verdict: GeoVerdict) -> bool:
                 convo["reply"] = reply
                 mutated = True
     else:
+        # Clear a stale geo-mismatch abstention if the recruiter clarified,
+        # or if we've reclassified on_site/hybrid-no-region from
+        # incompatible to needs_clarification.
         intent = convo.get("intent") or {}
         if intent.get("abstain") and intent.get("abstain_reason") == "geo_mismatch":
             intent["abstain"] = False
             intent["abstain_reason"] = None
+            convo["intent"] = intent
+            mutated = True
+        # Same for a pending reply that was marked abstained by an earlier
+        # run of this filter. Re-open it so the generator can re-draft
+        # (with a location question, when ask_location is true).
+        reply = convo.get("reply") or {}
+        if (
+            reply.get("status") == "abstained"
+            and reply.get("abstain_reason") == "geo_mismatch"
+        ):
+            reply["status"] = "pending_regeneration"
+            reply.pop("abstain_reason", None)
+            reply.pop("tier", None)
+            reply.pop("geo_note", None)
+            reply["text"] = ""
+            reply["message_count_at_generation"] = 0
+            reply["updated_at"] = verdict.evaluated_at
+            convo["reply"] = reply
             mutated = True
 
     return mutated
@@ -408,6 +437,7 @@ def run_sweep(target_urn: str | None, dry_run: bool) -> None:
 
     touched = 0
     incompat = 0
+    clarify = 0
     for convo in conversations:
         if convo.get("classification", {}).get("category") != "recruiter":
             continue
@@ -416,11 +446,13 @@ def run_sweep(target_urn: str | None, dry_run: bool) -> None:
         verdict = evaluate_convo(convo, policy)
         if verdict.verdict == "incompatible":
             incompat += 1
+        elif verdict.verdict == "needs_clarification":
+            clarify += 1
         other = next(
             (p.get("name") for p in convo.get("participants", []) if p.get("name") != USER_NAME),
             "?",
         )
-        tag = verdict.verdict.upper().ljust(12)
+        tag = verdict.verdict.upper().ljust(20)
         mode = verdict.work_mode.ljust(8)
         loc = verdict.location_text or "-"
         print(f"  [{tag}] [{mode}] {other:28} loc={loc!s:40} :: {verdict.reason}")
@@ -429,11 +461,17 @@ def run_sweep(target_urn: str | None, dry_run: bool) -> None:
                 touched += 1
 
     if dry_run:
-        print(f"dry-run: {incompat} incompatible of {len(conversations)} evaluated (no writes)")
+        print(
+            f"dry-run: {incompat} incompatible, {clarify} needs_clarification "
+            f"of {len(conversations)} evaluated (no writes)"
+        )
         return
 
     Path(CLASSIFIED_FILE).write_text(json.dumps(data, indent=2) + "\n")
-    print(f"Updated {CLASSIFIED_FILE} ({touched} threads mutated, {incompat} incompatible)")
+    print(
+        f"Updated {CLASSIFIED_FILE} "
+        f"({touched} mutated, {incompat} incompatible, {clarify} needs_clarification)"
+    )
 
 
 def main() -> None:
