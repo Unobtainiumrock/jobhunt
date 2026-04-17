@@ -76,6 +76,19 @@ services:
       - HEALTH_TELEGRAM_CHAT_ID=${HEALTH_TELEGRAM_CHAT_ID:-}
     restart: unless-stopped
 
+  telegram_bot:
+    build: .
+    command: ["python", "infra/telegram_bot.py"]
+    depends_on:
+      - review
+    volumes:
+      - app-data:/app/data
+    environment:
+      - HEALTH_TELEGRAM_BOT_TOKEN=${HEALTH_TELEGRAM_BOT_TOKEN:-}
+      - HEALTH_TELEGRAM_CHAT_ID=${HEALTH_TELEGRAM_CHAT_ID:-}
+      - LINKEDIN_USER_NAME=${LINKEDIN_USER_NAME:-Nicholas J. Fleischhauer}
+    restart: unless-stopped
+
   healthdog:
     build: .
     command: ["python", "infra/healthcheck.py", "--watch"]

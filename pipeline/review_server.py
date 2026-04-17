@@ -263,6 +263,20 @@ HTML_TEMPLATE = """\
     border: 1px dashed var(--border);
     border-radius: 14px;
   }
+  @media (max-width: 640px) {
+    body { padding: 1rem; }
+    h1 { font-size: 1.35rem; }
+    .tabs { gap: 0.4rem; }
+    .tab-btn { padding: 0.6rem 0.8rem; font-size: 0.85rem; flex: 1 1 auto; text-align: center; }
+    .stats { grid-template-columns: repeat(2, 1fr); gap: 0.6rem; }
+    .stat { padding: 0.7rem; }
+    .stat strong { font-size: 1.15rem; }
+    .card { padding: 0.9rem; }
+    .actions { gap: 0.4rem; }
+    .btn { padding: 0.7rem 0.9rem; font-size: 0.9rem; flex: 1 1 auto; min-height: 44px; }
+    textarea { font-size: 16px !important; }
+    input, select { font-size: 16px !important; }
+  }
 </style>
 </head>
 <body>

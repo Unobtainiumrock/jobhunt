@@ -90,8 +90,8 @@ docker compose version
 ### Step 4: Clone and configure
 
 ```bash
-# Clone your repo
-git clone https://github.com/YOUR_USER/linkedin-leads.git
+# Clone your repo (private)
+git clone git@github.com:Unobtainiumrock/linkedin-leads.git
 cd linkedin-leads
 
 # Create your .env from the template
@@ -108,6 +108,12 @@ VNC_PASSWORD=<pick something strong>
 
 HEALTH_TELEGRAM_BOT_TOKEN=7123456789:AAH...
 HEALTH_TELEGRAM_CHAT_ID=123456789
+
+# Approved-sender gating. Keep =0 until you've verified drafts in the UI.
+# Flip to 1 to let "Send Approved (live)" actually dispatch.
+LINKEDIN_SEND_ENABLED=0
+# Soft cap on outbound sends per hour (translated into per-run delays).
+SENDER_RATE_LIMIT=12
 ```
 
 ### Step 5: Launch
@@ -176,6 +182,45 @@ sudo caddy run --config /home/deploy/linkedin-leads/infra/Caddyfile
 
 Caddy auto-provisions Let's Encrypt TLS certificates. No manual cert management.
 
+### Step 9: Cutover — run on cron, stop local pipeline runs
+
+Once the stack is healthy and you've approved a few drafts over VNC/UI to
+confirm the sender works, flip the repo into "cloud is authoritative" mode.
+
+On the Hetzner host (`deploy` user), install the cron entries printed by
+`infra/cron.sh`:
+
+```bash
+cd ~/linkedin-leads
+./infra/cron.sh   # prints suggested crontab
+crontab -e        # paste the three lines
+```
+
+Then:
+
+```bash
+# flip the live-send gate on once you're comfortable
+sed -i 's/^LINKEDIN_SEND_ENABLED=.*/LINKEDIN_SEND_ENABLED=1/' .env
+docker compose up -d
+```
+
+Stop doing these on your laptop:
+
+- `npm run inbox`
+- `npm run pipeline`
+- `python -m pipeline.followup_scheduler`
+- `node src/send-approved.mjs --live`
+
+Your laptop's only remaining roles:
+
+1. Open `http://<SERVER_IP>:3457` (or Caddy domain) to review drafts.
+2. Telegram on your phone: `/status`, `/list`, `/approve <token>`,
+   `/reject <token>` via the bot running in the `telegram_bot` service.
+
+Everything else — scrape, classify, score, embed, generate, purge-stale,
+follow-up scheduling, sending — runs on the server, on the cron clock, with
+failure alerts piped straight to Telegram.
+
 ## Day-to-day operation
 
 | Situation | What to do |
@@ -187,6 +232,9 @@ Caddy auto-provisions Let's Encrypt TLS certificates. No manual cert management.
 | Update the code | `git pull && docker compose up -d --build` |
 | Check logs | `docker compose logs -f listener` (or any service name) |
 | Manual pipeline run | `docker compose exec listener npm run pipeline` |
+| Approve a draft from your phone | Telegram the bot: `/list` then `/approve <token>` |
+| Check status from your phone | Telegram the bot: `/status` |
+| Force-pause all sending | `sed -i 's/^LINKEDIN_SEND_ENABLED=.*/LINKEDIN_SEND_ENABLED=0/' .env && docker compose up -d review telegram_bot` |
 
 ## What persists across restarts
 
