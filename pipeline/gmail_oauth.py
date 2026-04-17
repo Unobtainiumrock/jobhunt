@@ -15,8 +15,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
+
+os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
 
 from google_auth_oauthlib.flow import InstalledAppFlow
 
