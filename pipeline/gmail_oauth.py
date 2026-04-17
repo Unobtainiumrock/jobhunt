@@ -72,14 +72,29 @@ def main() -> int:
 
     _validate_desktop_client(args.credentials)
 
+    raw = json.loads(args.credentials.read_text())
+    block = raw.get("installed") or raw.get("web") or {}
+    uris: list[str] = list(block.get("redirect_uris") or [])
+    if not uris:
+        print(
+            "OAuth client JSON has no redirect_uris. Re-download Desktop client "
+            "credentials from Google Cloud Console.",
+            file=sys.stderr,
+        )
+        return 1
+    # google-auth-oauthlib leaves redirect_uri unset until run_local_server;
+    # authorization_url omits it unless we assign explicitly (Google requires it).
+    redirect_uri = uris[0]
+
     flow = InstalledAppFlow.from_client_secrets_file(
         str(args.credentials),
         GMAIL_SCOPES,
     )
+    flow.redirect_uri = redirect_uri
     auth_url, _ = flow.authorization_url(
         access_type="offline",
         prompt="consent",
-        include_granted_scopes="true",
+        include_granted_scopes=True,
     )
     print("Open this URL in a browser (Cursor built-in browser is fine):\n")
     print(auth_url)
