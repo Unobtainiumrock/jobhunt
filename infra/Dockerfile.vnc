@@ -1,0 +1,29 @@
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV DISPLAY=:1
+ENV VNC_PORT=5901
+ENV NOVNC_PORT=6080
+ENV CDP_PORT=9222
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    xfce4 xfce4-terminal dbus-x11 \
+    tigervnc-standalone-server tigervnc-common tigervnc-tools \
+    novnc websockify \
+    wget gnupg ca-certificates fonts-liberation \
+    xdg-utils procps supervisor python3 socat nginx && \
+    wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && \
+    apt-get install -y /tmp/chrome.deb && \
+    rm /tmp/chrome.deb && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /data/chrome-profile /root/.vnc
+
+COPY infra/supervisord.conf /etc/supervisor/conf.d/linkedin.conf
+COPY infra/cdp-proxy.conf /etc/nginx/cdp-proxy.conf
+COPY infra/vnc-startup.sh /usr/local/bin/vnc-startup.sh
+RUN chmod +x /usr/local/bin/vnc-startup.sh
+
+EXPOSE ${VNC_PORT} ${NOVNC_PORT} ${CDP_PORT}
+
+CMD ["/usr/local/bin/vnc-startup.sh"]

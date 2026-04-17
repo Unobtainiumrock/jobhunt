@@ -1,0 +1,54 @@
+high_confidence:
+  structure:
+    - greeting
+    - dynamic_body
+    - resume_policy
+    - contact_info
+    - call_to_action
+  greeting_variants:
+    - "Hey {recruiter_first_name},"
+    - "Hi {recruiter_first_name},"
+    - "{recruiter_first_name},"
+  resume_policy: >
+    Happy to share my resume on a call. Easier to walk through it live
+    than send a PDF into the void.
+  contact_block: >
+    Best way to reach me: {phone} or {website}
+  cta_variants:
+    - "Got time for a quick call this week?"
+    - "Want to hop on a call? I'm pretty flexible this week."
+    - "Open to a call whenever. Just shoot me a time."
+    - "Free to chat most days this week if you want to sync up."
+
+medium_confidence:
+  structure:
+    - greeting
+    - interest_qualifier
+    - dynamic_body
+    - clarifying_question
+  interest_qualifier_variants:
+    - "Interesting. Couple questions though."
+    - "This caught my eye. Quick questions before we go further:"
+    - "Could be a fit. Want to make sure I understand the role first."
+  clarifying_questions:
+    - "What does the day-to-day actually look like for this role?"
+    - "How big is the team and who would I be working with?"
+    - "Is this fully remote or are you looking for someone on-site?"
+    - "What's the timeline on this? Are you trying to fill it soon?"
+
+low_confidence:
+  structure:
+    - greeting
+    - honest_assessment
+    - conditional_interest
+  honest_assessment_variants:
+    - "Gonna be straight with you. {gap_summary}."
+    - "Appreciate the ping. Fair warning though: {gap_summary}."
+  conditional_interest_variants:
+    - "That said, if {strength} is useful to you, I'm open to talking."
+    - "If you think {strength} bridges that gap, happy to chat."
+
+polite_decline:
+  variants:
+    - "Appreciate it {recruiter_first_name}, but this one's not quite what I'm looking for. Good luck with the search."
+    - "Thanks for the ping. Gonna pass on this one, but feel free to reach out if something else comes up."

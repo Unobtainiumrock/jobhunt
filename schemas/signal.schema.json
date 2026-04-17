@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://linkedin-leads.local/schemas/signal.schema.json",
+  "title": "Signal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "kind",
+    "source",
+    "created_at"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "deadline",
+        "phone_number",
+        "email",
+        "calendar_link",
+        "urgency",
+        "skill_gap",
+        "interview_request",
+        "location",
+        "compensation",
+        "other"
+      ]
+    },
+    "source": {
+      "type": "string",
+      "enum": ["conversation", "application", "prep_artifact", "manual", "other"]
+    },
+    "source_id": { "type": ["string", "null"] },
+    "value": {},
+    "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+    "notes": { "type": ["string", "null"] },
+    "created_at": { "type": "string", "format": "date-time" }
+  }
+}

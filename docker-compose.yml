@@ -1,0 +1,100 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    volumes:
+      - qdrant-storage:/qdrant/storage
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  desktop:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.vnc
+    ports:
+      - "127.0.0.1:6080:6080"
+    volumes:
+      - chrome-profile:/data/chrome-profile
+    environment:
+      - VNC_PASSWORD=${VNC_PASSWORD:-linkedin}
+      - CDP_PORT=9222
+      - VNC_PORT=5901
+      - NOVNC_PORT=6080
+    restart: unless-stopped
+    shm_size: "2gb"
+
+  listener:
+    build: .
+    command: ["npm", "run", "listen:full"]
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      desktop:
+        condition: service_started
+    volumes:
+      - app-data:/app/data
+    environment:
+      - CDP_URL=http://desktop:9223
+      - QDRANT_URL=http://qdrant:6333
+      - LISTENER_HEALTH_PORT=3765
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - CLASSIFY_MODEL=${CLASSIFY_MODEL:-gpt-4o-mini}
+      - GENERATION_MODEL=${GENERATION_MODEL:-gpt-4o-mini}
+      - REASONING_MODEL=${REASONING_MODEL:-o3}
+      - FAST_MODEL=${FAST_MODEL:-gpt-4o-mini}
+    restart: unless-stopped
+
+  review:
+    build: .
+    command: ["python", "-m", "pipeline.review_server"]
+    depends_on:
+      - qdrant
+      - desktop
+    ports:
+      - "127.0.0.1:3457:3457"
+    volumes:
+      - app-data:/app/data
+    environment:
+      - REVIEW_HOST=0.0.0.0
+      - QDRANT_URL=http://qdrant:6333
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # Send-approved.mjs (spawned by review server) drives Chrome in the
+      # `desktop` container over CDP.
+      - CDP_URL=http://desktop:9223
+      - LINKEDIN_USER_NAME=${LINKEDIN_USER_NAME:-Nicholas J. Fleischhauer}
+      # Server-side gate: must be 1 for the UI's "Send Approved (live)" to
+      # dispatch. Dry-runs are always allowed regardless.
+      - LINKEDIN_SEND_ENABLED=${LINKEDIN_SEND_ENABLED:-0}
+      # Soft cap on sends-per-hour. Translated into per-run delay + max envs
+      # by review_server._sender_rate_limit_env.
+      - SENDER_RATE_LIMIT=${SENDER_RATE_LIMIT:-12}
+      - HEALTH_TELEGRAM_BOT_TOKEN=${HEALTH_TELEGRAM_BOT_TOKEN:-}
+      - HEALTH_TELEGRAM_CHAT_ID=${HEALTH_TELEGRAM_CHAT_ID:-}
+    restart: unless-stopped
+
+  healthdog:
+    build: .
+    command: ["python", "infra/healthcheck.py", "--watch"]
+    depends_on:
+      - desktop
+      - qdrant
+      - listener
+    environment:
+      - CDP_URL=http://desktop:9223
+      - QDRANT_URL=http://qdrant:6333
+      - HEALTH_LISTENER_URL=http://listener:3765
+      - HEALTH_TELEGRAM_BOT_TOKEN=${HEALTH_TELEGRAM_BOT_TOKEN:-}
+      - HEALTH_TELEGRAM_CHAT_ID=${HEALTH_TELEGRAM_CHAT_ID:-}
+      - HEALTH_WEBHOOK_URL=${HEALTH_WEBHOOK_URL:-}
+      - HEALTH_CHECK_INTERVAL=${HEALTH_CHECK_INTERVAL:-60}
+      - HEALTH_ALERT_REMIND_INTERVAL=${HEALTH_ALERT_REMIND_INTERVAL:-1800}
+    restart: unless-stopped
+
+volumes:
+  qdrant-storage:
+  chrome-profile:
+  app-data:
