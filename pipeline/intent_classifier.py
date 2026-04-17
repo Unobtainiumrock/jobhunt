@@ -44,6 +44,7 @@ from typing import Any, Literal
 from openai import AsyncOpenAI
 
 from pipeline.config import CLASSIFIED_FILE, FAST_MODEL, MAX_CONCURRENT, USER_NAME
+from pipeline.email_context import email_blob_for_intent_hash, email_sidebar_for_urn
 
 IntentTag = Literal[
     "awaiting_their_move",
@@ -67,7 +68,9 @@ TAIL_MESSAGES = 6
 
 INTENT_SYSTEM_PROMPT = f"""\
 You are classifying the conversational state of a LinkedIn recruiter thread for \
-{USER_NAME}. Read the final exchange and pick ONE tag.
+{USER_NAME}. Read the final exchange and pick ONE tag. If a LINKED EMAIL block \
+is present, treat it as authoritative for rejections / scheduling / next steps \
+even when the LinkedIn thread has not caught up yet.
 
 Return strict JSON: {{"tag": "<tag>", "confidence": <0..1>, \
 "rationale": "<one sentence>"}}
@@ -117,10 +120,12 @@ def _collapse_whitespace(value: str) -> str:
 
 
 def _input_hash(convo: dict[str, Any]) -> str:
+    urn = str(convo.get("conversationUrn") or "")
     payload = {
         "tail": _tail_text(convo),
         "user": USER_NAME,
         "schema": "intent.v1",
+        "email": email_blob_for_intent_hash(urn),
     }
     blob = json.dumps(payload, sort_keys=True).encode()
     return hashlib.sha1(blob).hexdigest()
@@ -132,7 +137,12 @@ def _format_prompt(convo: dict[str, Any]) -> str:
         f"[{m['timestamp'] or '?'}] {m['sender']}: {m['text']}"
         for m in tail
     ]
-    return "RECENT MESSAGES (oldest -> newest):\n" + "\n".join(lines)
+    base = "RECENT MESSAGES (oldest -> newest):\n" + "\n".join(lines)
+    urn = str(convo.get("conversationUrn") or "")
+    email = email_sidebar_for_urn(urn) if urn else ""
+    if email.strip():
+        return base + "\n\n" + email.strip()
+    return base
 
 
 async def _classify_one(

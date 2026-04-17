@@ -26,11 +26,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
+from infra.google_oauth import load_authorized_user_credentials
 from pipeline.config import CLASSIFIED_FILE, DATA_DIR, USER_NAME
 from pipeline.extract_contacts import CALENDAR_DOMAINS
 
@@ -42,31 +40,11 @@ BOOKINGS_FILE = DATA_DIR / "bookings.json"
 
 def get_calendar_service() -> Any:
     """Authenticate and return a Google Calendar API service."""
-    creds: Credentials | None = None
-
-    if TOKEN_FILE.exists():
-        creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
-
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            if not CREDENTIALS_FILE.exists():
-                print(
-                    f"Error: Google credentials not found at {CREDENTIALS_FILE}\n"
-                    "Download OAuth 2.0 credentials from Google Cloud Console\n"
-                    "and save as data/google_credentials.json",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-            flow = InstalledAppFlow.from_client_secrets_file(
-                str(CREDENTIALS_FILE), SCOPES
-            )
-            creds = flow.run_local_server(port=0)
-
-        with open(TOKEN_FILE, "w") as f:
-            f.write(creds.to_json())
-
+    creds = load_authorized_user_credentials(
+        SCOPES,
+        token_path=TOKEN_FILE,
+        credentials_path=CREDENTIALS_FILE,
+    )
     return build("calendar", "v3", credentials=creds)
 
 

@@ -22,6 +22,7 @@
     "replies": "python -m pipeline.generate_reply",
     "replies:inspect": "python -m pipeline.generate_reply --inspect",
     "replies:purge-stale": "python -m pipeline.generate_reply --purge-stale",
+    "email:ingest": "python -m pipeline.email_ingest",
     "intent": "python -m pipeline.intent_classifier",
     "intent:force": "python -m pipeline.intent_classifier --force",
     "followups": "python -m pipeline.followup_scheduler",
@@ -52,7 +53,7 @@
     "trial:create": "python -m lib.trial_manager --create",
     "health": "python infra/healthcheck.py",
     "health:watch": "python infra/healthcheck.py --watch",
-    "pipeline": "python -m pipeline.dedupe_threads && python -m pipeline.classify_leads && python -m pipeline.embed_conversations && python -m pipeline.score_leads && python -m pipeline.intent_classifier && python -m pipeline.generate_reply && python -m pipeline.export_csv"
+    "pipeline": "python -m pipeline.dedupe_threads && python -m pipeline.classify_leads && python -m pipeline.embed_conversations && python -m pipeline.score_leads && python -m pipeline.email_ingest && python -m pipeline.intent_classifier && python -m pipeline.generate_reply && python -m pipeline.export_csv"
   },
   "dependencies": {
     "ws": "^8.18.0"

@@ -32,6 +32,7 @@ from pipeline.config import (
     GENERATION_MODEL, MAX_CONCURRENT, USER_NAME, USER_PHONE, USER_WEBSITE,
     SCORE_AUTO_REPLY, SCORE_REVIEW, REPLY_STALE_DAYS,
 )
+from pipeline.email_context import email_sidebar_for_urn
 from pipeline.safety import (
     build_system_prompt, validate_outbound, wrap_conversation_context,
 )
@@ -560,12 +561,18 @@ async def generate_reply_body(
             )
         retrieval_context = _build_retrieval_context_block(profile_hits, similar_messages)
 
+        email_block = email_sidebar_for_urn(str(convo.get("conversationUrn") or ""))
+        email_chunk = f"{email_block}\n\n" if email_block.strip() else ""
+
         system_prompt = build_system_prompt(USER_NAME, tone=tone, stage=stage)
         user_prompt = REPLY_GENERATION_PROMPT.format(
             user_name=USER_NAME,
             highlights=", ".join(highlights),
             tone=tone,
-        ) + f"\n\n{geo_context}\n\n{recruiter_context}\n\n{scheduling_block}\n\n{retrieval_context}\n\n{conversation_context}"
+        ) + (
+            f"\n\n{geo_context}\n\n{recruiter_context}\n\n{scheduling_block}\n\n"
+            f"{retrieval_context}\n\n{email_chunk}{conversation_context}"
+        )
 
         try:
             resp = await client.chat.completions.create(

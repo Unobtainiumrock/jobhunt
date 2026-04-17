@@ -88,7 +88,12 @@ class LinkedInAdapter(ChannelAdapter):
 
 
 class EmailAdapter(ChannelAdapter):
-    """Email via Gmail API."""
+    """Email via Gmail API.
+
+    Inbound fetch + sidecar persistence live in ``pipeline.email_ingest`` /
+    ``pipeline.email_gmail`` (run ``npm run email:ingest`` or the pipeline step).
+    This adapter remains a thin placeholder until send is implemented.
+    """
 
     @property
     def channel_name(self) -> str:
@@ -98,7 +103,7 @@ class EmailAdapter(ChannelAdapter):
         # Gmail API send
         return SendResult(
             success=False,
-            error="Gmail API not yet configured",
+            error="Gmail outbound send not yet implemented (use pipeline.email_ingest for inbound)",
             channel=self.channel_name,
         )
 

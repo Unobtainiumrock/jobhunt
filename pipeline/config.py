@@ -52,6 +52,26 @@ CLASSIFIED_FILE = DATA_DIR / "inbox_classified.json"
 CONTACTS_CSV = DATA_DIR / "contacts.csv"
 LEAD_STATE_FILE = DATA_DIR / "lead_states.json"
 
+# Gmail ingest (optional; see pipeline/email_ingest.py)
+GOOGLE_CREDENTIALS_FILE = DATA_DIR / "google_credentials.json"
+GOOGLE_TOKEN_GMAIL_FILE = DATA_DIR / os.getenv(
+    "GOOGLE_TOKEN_GMAIL_BASENAME", "google_token_gmail.json"
+)
+EMAIL_THREADS_FILE = DATA_DIR / "email_threads.json"
+EMAIL_SYNC_STATE_FILE = DATA_DIR / "email_sync_state.json"
+EMAIL_LINK_OVERRIDES_FILE = DATA_DIR / "email_link_overrides.json"
+GMAIL_SCOPES: list[str] = ["https://www.googleapis.com/auth/gmail.readonly"]
+GMAIL_INGEST_ENABLED: bool = os.getenv("GMAIL_INGEST_ENABLED", "0").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
+GMAIL_QUERY: str = os.getenv("GMAIL_QUERY", "newer_than:14d")
+GMAIL_MAX_MESSAGES: int = int(os.getenv("GMAIL_MAX_MESSAGES", "40") or "40")
+# Optional: your address on Gmail; used to ignore your own From when linking
+GMAIL_SELF_EMAIL: str = os.getenv("GMAIL_SELF_EMAIL", "").strip().lower()
+EMAIL_CONTEXT_MAX_CHARS: int = int(os.getenv("EMAIL_CONTEXT_MAX_CHARS", "900") or "900")
+
 PROFILE_FILE = PROFILE_DIR / "user_profile.yaml"
 
 # OpenAI models -- override via env vars for cost control
