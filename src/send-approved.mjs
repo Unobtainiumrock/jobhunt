@@ -15,6 +15,8 @@
  *   node src/send-approved.mjs --live --only replies
  *   node src/send-approved.mjs --live --only followups --max 3
  *   node src/send-approved.mjs --live --thread 2-ZTk4YTE1ZTIt
+ *   node src/send-approved.mjs --live --only replies --max 1 --reply-urn 'urn:li:...'
+ *   node src/send-approved.mjs --live --only followups --max 1 --followup-task-id '<uuid>'
  */
 
 import fs from 'fs';
@@ -43,6 +45,12 @@ const MAX_IDX = args.indexOf('--max');
 const MAX = MAX_IDX >= 0 ? Math.max(1, parseInt(args[MAX_IDX + 1] || '8', 10)) : 8;
 const THREAD_IDX = args.indexOf('--thread');
 const THREAD_FILTER = THREAD_IDX >= 0 ? String(args[THREAD_IDX + 1] || '').toLowerCase() : null;
+const REPLY_URN_IDX = args.indexOf('--reply-urn');
+const REPLY_URN_EXACT = REPLY_URN_IDX >= 0 ? String(args[REPLY_URN_IDX + 1] || '').trim() : null;
+const FOLLOWUP_TASK_IDX = args.indexOf('--followup-task-id');
+const FOLLOWUP_TASK_EXACT = FOLLOWUP_TASK_IDX >= 0
+  ? String(args[FOLLOWUP_TASK_IDX + 1] || '').trim()
+  : null;
 const INCLUDE_AUTO = args.includes('--include-auto-send');
 
 const DELAY_MIN_MS = parseInt(process.env.LINKEDIN_SEND_DELAY_MIN || '45000', 10);
@@ -126,6 +134,7 @@ function filterReplies(classified) {
     if (convo.classification?.category !== 'recruiter') continue;
 
     const urn = convo.conversationUrn || '';
+    if (REPLY_URN_EXACT && urn !== REPLY_URN_EXACT) continue;
     if (THREAD_FILTER && !urn.toLowerCase().includes(THREAD_FILTER) &&
       !participantName(convo).toLowerCase().includes(THREAD_FILTER)) continue;
 
@@ -162,8 +171,10 @@ function filterFollowups(queue) {
   const skipped = [];
   for (const entry of queue.followups || []) {
     if (entry.status !== 'approved') continue;
+    if (FOLLOWUP_TASK_EXACT && entry.task_id !== FOLLOWUP_TASK_EXACT) continue;
     const urn = entry.thread_id || '';
-    if (THREAD_FILTER && !urn.toLowerCase().includes(THREAD_FILTER)) continue;
+    if (THREAD_FILTER && !urn.toLowerCase().includes(THREAD_FILTER) &&
+      !String(entry.task_id || '').toLowerCase().includes(THREAD_FILTER)) continue;
 
     if (isTamperingDetected(entry.approved_message, entry.message, entry.manually_edited)) {
       skipped.push({

@@ -56,9 +56,14 @@ State lives in three named volumes: `app-data`, `chrome-profile`,
 ## Safety rails already in the code (don't weaken these silently)
 
 - `LINKEDIN_SEND_ENABLED` in `.env` gates live sends. Default: `0`
-  (dry-run only). Flip to `1` only after human review of drafts.
+  (dry-run only). Flip to `1` only after you trust the draft quality. When
+  `1`, approving a reply or follow-up (web UI or Telegram `/approve`)
+  immediately runs the LinkedIn sender for that thread (same `send-approved`
+  pipeline as the bulk button, serialized via `data/.send_approved.lock`).
+  With `0`, approve still persists JSON but never dispatches.
 - `SENDER_RATE_LIMIT` caps sends/hour. Translated automatically into
-  per-run delay envs by `pipeline/review_server.py`.
+  per-run delay envs by `pipeline/send_approved_exec.py` (used by both the
+  review server and the Telegram bot).
 - Follow-up scheduler enforces a hard cap of 2 follow-ups; a runtime
   `AssertionError` fires if anything tries to emit a `followup_3`.
 - `pipeline/generate_reply.py` abstains on `dead_end` / `awaiting_*`

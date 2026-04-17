@@ -12,9 +12,10 @@ dispatches a small command grammar:
     /reject  <token>        - flips matching draft to ``rejected``
     /help                   - command reference
 
-The bot only writes to ``data/inbox_classified.json`` (same surface the web
-UI touches). Actually dispatching approved sends stays behind the existing
-``LINKEDIN_SEND_ENABLED`` gate + the cron job.
+The bot writes to ``data/inbox_classified.json`` (same surface the web UI
+touches). ``/approve`` marks a reply approved then, when
+``LINKEDIN_SEND_ENABLED=1``, immediately runs ``send-approved.mjs`` for that
+thread (serialized with the review UI via ``data/.send_approved.lock``).
 
 Safety guarantees:
 - Only the configured ``HEALTH_TELEGRAM_CHAT_ID`` may issue commands.
@@ -57,6 +58,11 @@ if str(PROJECT_ROOT) not in sys.path:
 
 # Load .env the same way infra/notify.py does so this works standalone.
 from infra.notify import send_telegram  # noqa: E402  (side-effect: loads .env)
+from pipeline.send_approved_exec import (  # noqa: E402
+    build_send_argv,
+    env_truthy,
+    run_send_approved_with_lock,
+)
 
 TELEGRAM_TOKEN = os.getenv("HEALTH_TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("HEALTH_TELEGRAM_CHAT_ID", "").strip()
@@ -133,8 +139,8 @@ def cmd_help() -> str:
         "/approve &lt;token&gt; - mark draft approved\n"
         "/reject &lt;token&gt; - mark draft rejected\n"
         "/help - this message\n\n"
-        "<i>Tokens are the short prefixes shown by /list. Sends still require the\n"
-        "cron + LINKEDIN_SEND_ENABLED gate on the server.</i>"
+        "<i>Tokens are the short prefixes shown by /list. Live sends require\n"
+        "LINKEDIN_SEND_ENABLED=1 on the server (same as the review UI).</i>"
     )
 
 
@@ -239,7 +245,27 @@ def _mutate_reply(token: str, new_status: str) -> str:
         convo["reply"]["approved_text"] = convo["reply"].get("text", "")
     _atomic_write_json(CLASSIFIED_FILE, data)
     name = _participant_name(convo)
-    return f"✅ <b>{new_status}</b> — {name} (<code>{_conversation_token(convo['conversationUrn'])}</code>)"
+    base = (
+        f"✅ <b>{new_status}</b> — {name} "
+        f"(<code>{_conversation_token(convo['conversationUrn'])}</code>)"
+    )
+    if new_status != "approved":
+        return base
+    if not env_truthy("LINKEDIN_SEND_ENABLED", default=False):
+        return base + "\n\n<i>Approved only — LINKEDIN_SEND_ENABLED=0 (no send).</i>"
+    urn = str(convo.get("conversationUrn") or "")
+    if not urn:
+        return base + "\n\n⚠️ Missing conversation URN; cannot send."
+    argv = build_send_argv(only="replies", max_items=1, live=True, reply_urn=urn)
+    try:
+        proc = run_send_approved_with_lock(argv)
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.exception("telegram approve autosend failed")
+        return base + f"\n\n⚠️ Send error: {exc}"
+    if proc.returncode == 0:
+        return base + "\n\n<b>Sent</b> to LinkedIn."
+    tail = (proc.stderr or proc.stdout or "").strip()[-300:]
+    return base + f"\n\n⚠️ Send failed (exit {proc.returncode}). {tail}"
 
 
 def cmd_approve(args: list[str]) -> str:

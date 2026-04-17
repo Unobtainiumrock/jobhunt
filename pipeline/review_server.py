@@ -51,38 +51,15 @@ from pipeline.research_enrichment import (
     _start_jobs,
 )
 from pipeline.sync_entities import sync_entities
+from pipeline.send_approved_exec import (
+    SEND_SCRIPT,
+    build_send_argv,
+    env_truthy,
+    run_send_approved_with_lock,
+)
 
 DEFAULT_PORT = 3457
 SEND_HISTORY_FILE = DATA_DIR / "send_history.jsonl"
-SEND_SCRIPT = PROJECT_ROOT / "src" / "send-approved.mjs"
-
-
-def _env_truthy(name: str, default: bool = False) -> bool:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in ("1", "true", "yes", "on", "enabled")
-
-
-def _sender_rate_limit_env() -> dict[str, str]:
-    """Translate the single ``SENDER_RATE_LIMIT`` knob (sends per hour) into
-    the granular per-run envs the Node dispatcher understands. Returning a
-    fresh dict keeps the parent process env untouched."""
-    extra: dict[str, str] = {}
-    raw = os.environ.get("SENDER_RATE_LIMIT")
-    if not raw:
-        return extra
-    try:
-        per_hour = max(1, int(raw))
-    except ValueError:
-        return extra
-    # Cap per-run sends at the hourly budget, and space jitter so a full run
-    # lands inside the hour (with ~25% headroom for safety).
-    extra["LINKEDIN_MAX_SENDS_PER_RUN"] = str(per_hour)
-    base_gap_ms = int((3600 / per_hour) * 1000 * 0.75)
-    extra["LINKEDIN_SEND_DELAY_MIN"] = str(max(15000, base_gap_ms))
-    extra["LINKEDIN_SEND_DELAY_MAX"] = str(max(30000, int(base_gap_ms * 1.6)))
-    return extra
 
 _send_state_lock = threading.Lock()
 _send_state: dict[str, Any] = {
@@ -767,11 +744,15 @@ function render() {
 async function replyAction(index, action) {
   const convo = state.replies[index];
   const text = document.getElementById('reply-edit-' + index).value;
-  await fetch('/api/action', {
+  const resp = await fetch('/api/action', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ urn: convo.conversationUrn, action, text }),
   });
+  const data = await resp.json().catch(() => ({}));
+  if (action === 'approve' && data.autosend && !data.autosend.skipped && data.autosend.ok === false) {
+    alert('Approved, but LinkedIn send failed: ' + (data.autosend.error || 'see server logs'));
+  }
   await load();
 }
 
@@ -787,6 +768,12 @@ async function followupAction(index, action) {
     const err = await resp.json().catch(() => ({}));
     alert(err.error || 'Follow-up action failed');
     return;
+  }
+  const data = await resp.json().catch(() => ({}));
+  if (action === 'approve' && data.autosend && !data.autosend.skipped) {
+    if (data.autosend.ok === false) {
+      alert('Approved, but LinkedIn send failed: ' + (data.autosend.error || 'see server logs'));
+    }
   }
   await load();
 }
@@ -1119,13 +1106,101 @@ def _read_send_history(limit: int = 20) -> list[dict[str, Any]]:
     return entries
 
 
-def _spawn_send_approved(kind: str, max_items: int, dry_run: bool) -> dict[str, Any]:
+def _send_state_tail_from_proc(proc: subprocess.CompletedProcess[str]) -> None:
+    tail_lines = (proc.stdout or "").splitlines()[-40:]
+    with _send_state_lock:
+        _send_state["running"] = False
+        _send_state["finished_at"] = datetime.now(timezone.utc).isoformat()
+        _send_state["last_exit_code"] = proc.returncode
+        _send_state["stdout_tail"] = "\n".join(tail_lines)
+        if proc.returncode != 0:
+            _send_state["last_error"] = (proc.stderr or "").strip()[-400:]
+        else:
+            _send_state["last_error"] = None
+
+
+def _autosend_reply_after_approve(urn: str) -> dict[str, Any]:
+    """Immediately dispatch one approved reply when live sends are enabled."""
+    if not env_truthy("LINKEDIN_SEND_ENABLED", default=False):
+        return {"skipped": True, "reason": "LINKEDIN_SEND_ENABLED=0"}
+    if not SEND_SCRIPT.exists():
+        return {"ok": False, "error": f"sender script missing at {SEND_SCRIPT}"}
+    with _send_state_lock:
+        if _send_state.get("running"):
+            return {"ok": False, "error": "send_in_progress"}
+        _send_state.update({
+            "running": True,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "finished_at": None,
+            "last_mode": "live",
+            "last_kind": "replies",
+            "last_exit_code": None,
+            "last_error": None,
+            "stdout_tail": "",
+        })
+    argv = build_send_argv(only="replies", max_items=1, live=True, reply_urn=urn)
+    try:
+        proc = run_send_approved_with_lock(argv)
+    except Exception as exc:  # pragma: no cover — defensive
+        with _send_state_lock:
+            _send_state["running"] = False
+            _send_state["finished_at"] = datetime.now(timezone.utc).isoformat()
+            _send_state["last_exit_code"] = -1
+            _send_state["last_error"] = str(exc)
+        return {"ok": False, "error": str(exc)}
+    _send_state_tail_from_proc(proc)
+    return {"ok": proc.returncode == 0, "exit_code": proc.returncode}
+
+
+def _autosend_followup_after_approve(task_id: str) -> dict[str, Any]:
+    """Immediately dispatch one approved follow-up when live sends are enabled."""
+    if not env_truthy("LINKEDIN_SEND_ENABLED", default=False):
+        return {"skipped": True, "reason": "LINKEDIN_SEND_ENABLED=0"}
+    if not SEND_SCRIPT.exists():
+        return {"ok": False, "error": f"sender script missing at {SEND_SCRIPT}"}
+    with _send_state_lock:
+        if _send_state.get("running"):
+            return {"ok": False, "error": "send_in_progress"}
+        _send_state.update({
+            "running": True,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "finished_at": None,
+            "last_mode": "live",
+            "last_kind": "followups",
+            "last_exit_code": None,
+            "last_error": None,
+            "stdout_tail": "",
+        })
+    argv = build_send_argv(
+        only="followups", max_items=1, live=True, followup_task_id=task_id
+    )
+    try:
+        proc = run_send_approved_with_lock(argv)
+    except Exception as exc:  # pragma: no cover — defensive
+        with _send_state_lock:
+            _send_state["running"] = False
+            _send_state["finished_at"] = datetime.now(timezone.utc).isoformat()
+            _send_state["last_exit_code"] = -1
+            _send_state["last_error"] = str(exc)
+        return {"ok": False, "error": str(exc)}
+    _send_state_tail_from_proc(proc)
+    return {"ok": proc.returncode == 0, "exit_code": proc.returncode}
+
+
+def _spawn_send_approved(
+    kind: str,
+    max_items: int,
+    dry_run: bool,
+    *,
+    reply_urn: str | None = None,
+    followup_task_id: str | None = None,
+) -> dict[str, Any]:
     if not SEND_SCRIPT.exists():
         raise RuntimeError(f"Sender script missing at {SEND_SCRIPT}")
 
     # Server-side safety rail: live sends require explicit opt-in via env.
     # Dry runs are always allowed so operators can rehearse without risk.
-    if not dry_run and not _env_truthy("LINKEDIN_SEND_ENABLED", default=False):
+    if not dry_run and not env_truthy("LINKEDIN_SEND_ENABLED", default=False):
         raise RuntimeError(
             "Live sending disabled (set LINKEDIN_SEND_ENABLED=1 on the review service to enable)"
         )
@@ -1145,34 +1220,19 @@ def _spawn_send_approved(kind: str, max_items: int, dry_run: bool) -> dict[str, 
             "stdout_tail": "",
         })
 
-    argv: list[str] = ["node", str(SEND_SCRIPT)]
-    if not dry_run:
-        argv.append("--live")
-    if kind in ("replies", "followups"):
-        argv.extend(["--only", kind])
-    if max_items and max_items > 0:
-        argv.extend(["--max", str(max_items)])
-
-    child_env = {**os.environ, **_sender_rate_limit_env()}
+    only_arg = kind if kind in ("replies", "followups", "all") else "all"
+    argv = build_send_argv(
+        only=only_arg,
+        max_items=max_items,
+        live=not dry_run,
+        reply_urn=reply_urn,
+        followup_task_id=followup_task_id,
+    )
 
     def _runner() -> None:
         try:
-            proc = subprocess.run(
-                argv,
-                cwd=str(PROJECT_ROOT),
-                capture_output=True,
-                text=True,
-                timeout=60 * 30,
-                env=child_env,
-            )
-            tail_lines = (proc.stdout or "").splitlines()[-40:]
-            with _send_state_lock:
-                _send_state["running"] = False
-                _send_state["finished_at"] = datetime.now(timezone.utc).isoformat()
-                _send_state["last_exit_code"] = proc.returncode
-                _send_state["stdout_tail"] = "\n".join(tail_lines)
-                if proc.returncode != 0:
-                    _send_state["last_error"] = (proc.stderr or "").strip()[-400:]
+            proc = run_send_approved_with_lock(argv)
+            _send_state_tail_from_proc(proc)
         except Exception as exc:  # pragma: no cover — defensive
             with _send_state_lock:
                 _send_state["running"] = False
@@ -1330,7 +1390,10 @@ class ReviewHandler(BaseHTTPRequestHandler):
             json.dump(data, f, indent=2)
             f.write("\n")
 
-        self._write_json(200, {"ok": True})
+        autosend: dict[str, Any] | None = None
+        if action == "approve" and urn:
+            autosend = _autosend_reply_after_approve(urn)
+        self._write_json(200, {"ok": True, "autosend": autosend})
 
     def _serve_followups(self) -> None:
         self._write_json(200, _build_followups_payload())
@@ -1351,6 +1414,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self._write_json(400, {"ok": False, "error": str(exc)})
             return
+        if action == "approve" and task_id:
+            result["autosend"] = _autosend_followup_after_approve(task_id)
         self._write_json(200, result)
 
     def _handle_send_action(self) -> None:
