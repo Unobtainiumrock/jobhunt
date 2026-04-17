@@ -320,10 +320,19 @@ async function dispatchOne(ctx, item) {
     preview: item.text.slice(0, 120).replace(/\n/g, ' '),
   });
 
-  if (!result.ok || !result.verified || result.authwall) {
+  // Only alert on *actual* failures:
+  //   - result.ok === false (click/voyager never accepted the message)
+  //   - authwall (session expired, needs human)
+  // An ok-but-unverified send means LinkedIn accepted the compose but the
+  // verifier didn't see the message in the feed within the timeout. That is
+  // nearly always a slow-feed false alarm; logging it locally is enough.
+  if (result.ok && !result.verified && !result.authwall) {
+    log(`  (unverified-but-sent; skipping Telegram alert) → ${item.recipient || shortUrn(item.urn)}`);
+  }
+  if (!result.ok || result.authwall) {
     const failureReason = result.authwall
       ? 'LinkedIn authwall / session expired'
-      : result.error || 'unverified send';
+      : result.error || 'send failed';
     const alert = `LinkedIn send issue (${item.kind}):\n` +
       `recipient: ${item.recipient || shortUrn(item.urn)}\n` +
       `mode: ${result.mode_used || 'none'}\n` +

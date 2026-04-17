@@ -28,6 +28,7 @@ from pipeline.config import (
     DATA_DIR,
     FOLLOWUP_QUEUE_FILE,
     INTERVIEW_LOOPS_DIR,
+    LEAD_STATE_FILE,
     OPPORTUNITIES_DIR,
     PREP_ARTIFACTS_DIR,
     PROJECT_ROOT,
@@ -232,6 +233,28 @@ HTML_TEMPLATE = """\
   .btn-green { color: var(--green); border-color: rgba(74,222,128,0.35); background: rgba(74,222,128,0.10); }
   .btn-yellow { color: var(--yellow); border-color: rgba(251,191,36,0.35); background: rgba(251,191,36,0.10); }
   .btn-red { color: var(--red); border-color: rgba(251,113,133,0.35); background: rgba(251,113,133,0.10); }
+  .btn-gray { color: var(--muted); border-color: var(--border); background: var(--surface-2); }
+  .btn[disabled], .btn[aria-disabled="true"] {
+    opacity: 0.45;
+    cursor: not-allowed;
+    filter: grayscale(0.4);
+    pointer-events: none;
+  }
+  .btn.pending {
+    opacity: 0.7;
+    cursor: wait;
+    pointer-events: none;
+  }
+  .card.settled { opacity: 0.55; border-color: var(--border); }
+  .card.settled .btn { pointer-events: none; }
+  .resolved-note {
+    margin-top: 0.6rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+  }
+  .resolved-note.approved { color: var(--green); }
+  .resolved-note.rejected { color: var(--red); }
+  .resolved-note.abstained { color: var(--muted); }
   .hidden { display: none; }
   .empty {
     text-align: center;
@@ -453,15 +476,30 @@ function renderReplies() {
       '[' + (m.timestamp || '').substring(0,16) + '] ' + m.sender + ': ' + (m.text || '')
     ).join('\\n');
 
+    const status = reply.status || 'draft';
+    const isSettled = ['approved', 'sent', 'rejected', 'abstained', 'manually_handled'].includes(status);
+    const resolvedClass = ['approved', 'sent'].includes(status) ? 'approved'
+      : status === 'rejected' ? 'rejected'
+      : ['abstained', 'manually_handled'].includes(status) ? 'abstained'
+      : '';
+    const resolvedLabel = {
+      approved: 'Approved' + (reply.approved_at ? ' · ' + reply.approved_at.substring(0, 16) : ''),
+      sent: 'Sent' + (reply.sent_at ? ' · ' + reply.sent_at.substring(0, 16) : ''),
+      rejected: 'Rejected' + (reply.rejected_at ? ' · ' + reply.rejected_at.substring(0, 16) : ''),
+      abstained: 'Abstained' + (reply.abstain_reason ? ' · ' + reply.abstain_reason : ''),
+      manually_handled: 'Manually handled',
+    }[status] || '';
+    const dis = isSettled ? 'disabled' : '';
+
     return `
-      <div class="card">
+      <div class="card ${isSettled ? 'settled' : ''}" data-urn="${convo.conversationUrn || ''}">
         <div class="card-header">
           <div>
             <div class="title">${other.name}</div>
             <div class="meta">${other.headline || ''}</div>
             <div class="meta">${meta.role_title ? meta.role_title + ' at ' + (meta.company || '?') : ''}</div>
           </div>
-          <span class="${badgeClass(reply.status || 'draft')}">${reply.status || 'draft'}</span>
+          <span class="${badgeClass(status)}">${status}</span>
         </div>
         ${score.total != null ? `<div class="meta">Match score: ${score.total}/100</div>` : ''}
         ${reply.sent_at ? `<div class="meta">Sent ${reply.sent_at} via ${reply.send_mode || '?'} (verified=${reply.send_verified ? 'yes' : 'no'})</div>` : ''}
@@ -476,13 +514,15 @@ function renderReplies() {
         <div class="row">
           <div style="grid-column: 1 / -1;">
             <label>Edit Reply</label>
-            <textarea id="reply-edit-${i}">${reply.text || ''}</textarea>
+            <textarea id="reply-edit-${i}" ${dis}>${reply.text || ''}</textarea>
           </div>
         </div>
         <div class="actions">
-          <button class="btn btn-green" onclick="replyAction(${i}, 'approve')">Approve</button>
-          <button class="btn btn-red" onclick="replyAction(${i}, 'reject')">Reject</button>
+          <button class="btn btn-green" ${dis} onclick="replyAction(this, ${i}, 'approve')">Approve</button>
+          <button class="btn btn-red" ${dis} onclick="replyAction(this, ${i}, 'reject')">Reject</button>
+          <button class="btn btn-gray" ${dis} onclick="replyAction(this, ${i}, 'mark_dead')" title="Lead is dead (out-of-band). Abstain and stop future follow-ups.">Mark Dead</button>
         </div>
+        ${resolvedLabel ? `<div class="resolved-note ${resolvedClass}">${resolvedLabel}</div>` : ''}
       </div>
     `;
   }).join('');
@@ -497,15 +537,26 @@ function renderFollowups() {
   }
 
   container.innerHTML = toolbar + state.followups.map((item, i) => {
+    const status = item.status || 'draft';
+    const isSettled = ['approved', 'sent', 'rejected'].includes(status);
+    const resolvedClass = ['approved', 'sent'].includes(status) ? 'approved'
+      : status === 'rejected' ? 'rejected'
+      : '';
+    const resolvedLabel = {
+      approved: 'Approved' + (item.approved_at ? ' · ' + item.approved_at.substring(0, 16) : ''),
+      sent: 'Sent' + (item.sent_at ? ' · ' + item.sent_at.substring(0, 16) : ''),
+      rejected: 'Rejected' + (item.rejected_at ? ' · ' + item.rejected_at.substring(0, 16) : ''),
+    }[status] || '';
+    const dis = isSettled ? 'disabled' : '';
     return `
-      <div class="card">
+      <div class="card ${isSettled ? 'settled' : ''}">
         <div class="card-header">
           <div>
             <div class="title">${item.recipient || 'Unknown'} — follow-up #${item.followup_number || '?'}</div>
             <div class="meta">${item.company || ''} ${item.role_title ? '· ' + item.role_title : ''}</div>
             <div class="meta">task ${item.task_id || ''}</div>
           </div>
-          <span class="${badgeClass(item.status || 'draft')}">${item.status || 'draft'}</span>
+          <span class="${badgeClass(status)}">${status}</span>
         </div>
         ${item.score != null ? `<div class="meta">Opportunity score: ${item.score}/100</div>` : ''}
         ${item.sent_at ? `<div class="meta">Sent ${item.sent_at} via ${item.send_mode || '?'} (verified=${item.send_verified ? 'yes' : 'no'})</div>` : ''}
@@ -514,14 +565,15 @@ function renderFollowups() {
         <div class="row">
           <div style="grid-column: 1 / -1;">
             <label>Edit Follow-up</label>
-            <textarea id="followup-edit-${i}">${item.message || ''}</textarea>
+            <textarea id="followup-edit-${i}" ${dis}>${item.message || ''}</textarea>
           </div>
         </div>
         <div class="actions">
-          <button class="btn btn-green" onclick="followupAction(${i}, 'approve')">Approve</button>
-          <button class="btn btn-red" onclick="followupAction(${i}, 'reject')">Reject</button>
-          <button class="btn btn-yellow" onclick="followupAction(${i}, 'edit')">Save Edit Only</button>
+          <button class="btn btn-green" ${dis} onclick="followupAction(this, ${i}, 'approve')">Approve</button>
+          <button class="btn btn-red" ${dis} onclick="followupAction(this, ${i}, 'reject')">Reject</button>
+          <button class="btn btn-yellow" ${dis} onclick="followupAction(this, ${i}, 'edit')">Save Edit Only</button>
         </div>
+        ${resolvedLabel ? `<div class="resolved-note ${resolvedClass}">${resolvedLabel}</div>` : ''}
       </div>
     `;
   }).join('');
@@ -741,39 +793,82 @@ function render() {
   renderWorkflow();
 }
 
-async function replyAction(index, action) {
+function _setActionPending(buttonEl, label) {
+  if (!buttonEl) return null;
+  const card = buttonEl.closest('.card');
+  if (!card) return null;
+  card.classList.add('settled');
+  const buttons = card.querySelectorAll('.btn');
+  buttons.forEach(b => {
+    b.setAttribute('aria-disabled', 'true');
+    b.disabled = true;
+  });
+  buttonEl.classList.add('pending');
+  const orig = buttonEl.textContent;
+  buttonEl.textContent = label;
+  return () => {
+    buttonEl.classList.remove('pending');
+    buttonEl.textContent = orig;
+  };
+}
+
+async function replyAction(btn, index, action) {
   const convo = state.replies[index];
   const text = document.getElementById('reply-edit-' + index).value;
-  const resp = await fetch('/api/action', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ urn: convo.conversationUrn, action, text }),
-  });
-  const data = await resp.json().catch(() => ({}));
-  if (action === 'approve' && data.autosend && !data.autosend.skipped && data.autosend.ok === false) {
-    alert('Approved, but LinkedIn send failed: ' + (data.autosend.error || 'see server logs'));
+  const clickedBtn = btn;
+  const label = { approve: 'Approving…', reject: 'Rejecting…', mark_dead: 'Marking dead…' }[action] || 'Working…';
+  const restore = _setActionPending(clickedBtn, label);
+  try {
+    const resp = await fetch('/api/action', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ urn: convo.conversationUrn, action, text }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      alert((data && data.error) || `Action failed (${resp.status})`);
+      if (restore) restore();
+      return;
+    }
+    if (action === 'approve' && data.autosend && !data.autosend.skipped && data.autosend.ok === false) {
+      alert('Approved, but LinkedIn send failed: ' + (data.autosend.error || 'see server logs'));
+    }
+  } catch (err) {
+    alert('Network error: ' + err);
+    if (restore) restore();
+    return;
   }
   await load();
 }
 
-async function followupAction(index, action) {
+async function followupAction(btn, index, action) {
   const item = state.followups[index];
   const text = document.getElementById('followup-edit-' + index).value;
-  const resp = await fetch('/api/followups/action', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ task_id: item.task_id, action, text }),
-  });
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({}));
-    alert(err.error || 'Follow-up action failed');
-    return;
-  }
-  const data = await resp.json().catch(() => ({}));
-  if (action === 'approve' && data.autosend && !data.autosend.skipped) {
-    if (data.autosend.ok === false) {
-      alert('Approved, but LinkedIn send failed: ' + (data.autosend.error || 'see server logs'));
+  const clickedBtn = btn;
+  const label = { approve: 'Approving…', reject: 'Rejecting…', edit: 'Saving…' }[action] || 'Working…';
+  const restore = _setActionPending(clickedBtn, label);
+  try {
+    const resp = await fetch('/api/followups/action', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ task_id: item.task_id, action, text }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      alert(err.error || 'Follow-up action failed');
+      if (restore) restore();
+      return;
     }
+    const data = await resp.json().catch(() => ({}));
+    if (action === 'approve' && data.autosend && !data.autosend.skipped) {
+      if (data.autosend.ok === false) {
+        alert('Approved, but LinkedIn send failed: ' + (data.autosend.error || 'see server logs'));
+      }
+    }
+  } catch (err) {
+    alert('Network error: ' + err);
+    if (restore) restore();
+    return;
   }
   await load();
 }
@@ -834,6 +929,31 @@ load();
 def _load_json(path: Path) -> dict[str, Any]:
     with open(path) as f:
         return json.load(f)
+
+
+def _mark_lead_declined(urn: str, now_iso: str) -> None:
+    """Flip lead_states[urn].status to 'declined' so the follow-up scheduler
+    skips this thread. No-ops silently if the state file or entry is missing.
+    """
+    if not urn:
+        return
+    states: dict[str, Any] = {}
+    if LEAD_STATE_FILE.exists():
+        try:
+            states = _load_json(LEAD_STATE_FILE)
+        except json.JSONDecodeError:
+            states = {}
+    entry = states.get(urn) or {}
+    entry.update({
+        "status": "declined",
+        "updated_at": now_iso,
+        "marked_dead_at": now_iso,
+    })
+    states[urn] = entry
+    LEAD_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(LEAD_STATE_FILE, "w") as handle:
+        json.dump(states, handle, indent=2)
+        handle.write("\n")
 
 
 def _load_records(directory: Path) -> list[dict[str, Any]]:
@@ -1384,6 +1504,26 @@ class ReviewHandler(BaseHTTPRequestHandler):
             elif action == "reject":
                 convo["reply"]["status"] = "rejected"
                 convo["reply"]["rejected_at"] = datetime.now(timezone.utc).isoformat()
+            elif action == "mark_dead":
+                # Manual dead-end escape hatch: the operator knows this thread
+                # is dead from out-of-band context (email rejection, verbal
+                # decline, etc.). We stamp three places so every downstream
+                # consumer stops drafting/sending:
+                #   - reply.status = abstained  → review UI hides it
+                #   - intent.abstain = True     → generate_reply skips it
+                #   - lead_states[urn].status = declined → follow-up
+                #     scheduler bucket drops it
+                now = datetime.now(timezone.utc).isoformat()
+                convo["reply"]["status"] = "abstained"
+                convo["reply"]["abstain_reason"] = "manual_dead_end"
+                convo["reply"]["marked_dead_at"] = now
+                intent = convo.get("intent") or {}
+                intent["abstain"] = True
+                intent["abstain_reason"] = "manual_dead_end"
+                intent["tag"] = "dead_end"
+                intent["marked_dead_at"] = now
+                convo["intent"] = intent
+                _mark_lead_declined(urn, now)
             break
 
         with open(CLASSIFIED_FILE, "w") as f:
@@ -1393,7 +1533,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
         autosend: dict[str, Any] | None = None
         if action == "approve" and urn:
             autosend = _autosend_reply_after_approve(urn)
-        self._write_json(200, {"ok": True, "autosend": autosend})
+        self._write_json(200, {"ok": True, "action": action, "autosend": autosend})
 
     def _serve_followups(self) -> None:
         self._write_json(200, _build_followups_payload())

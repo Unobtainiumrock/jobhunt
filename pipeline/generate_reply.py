@@ -18,7 +18,7 @@ import random
 import re
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import yaml
@@ -27,7 +27,7 @@ from openai import AsyncOpenAI
 from pipeline.config import (
     CLASSIFIED_FILE, PROFILE_FILE, TEMPLATES_DIR,
     GENERATION_MODEL, MAX_CONCURRENT, USER_NAME, USER_PHONE, USER_WEBSITE,
-    SCORE_AUTO_REPLY, SCORE_REVIEW,
+    SCORE_AUTO_REPLY, SCORE_REVIEW, REPLY_STALE_DAYS,
 )
 from pipeline.safety import (
     build_system_prompt, validate_outbound, wrap_conversation_context,
@@ -703,6 +703,58 @@ def _should_abstain(convo: dict[str, Any]) -> bool:
     return bool((convo.get("intent") or {}).get("abstain"))
 
 
+# Intent tags that indicate an ongoing engagement where the freshness rule
+# should NOT fire, even if the last inbound is old. A thread mid-interview
+# can legitimately go quiet for >7 days; we still owe them a reply.
+_ONGOING_INTENT_TAGS = frozenset({
+    "ready_to_schedule",
+    "awaiting_their_feedback",
+})
+
+
+def _parse_iso(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _last_inbound_timestamp(convo: dict[str, Any]) -> datetime | None:
+    """Most recent message NOT sent by the user, parsed to aware datetime."""
+    for msg in reversed(convo.get("messages") or []):
+        sender = (msg.get("sender") or msg.get("from") or "").lower()
+        if not sender:
+            continue
+        user_tokens = [t for t in USER_NAME.lower().split() if len(t) >= 3]
+        if any(tok in sender for tok in user_tokens):
+            continue
+        ts = _parse_iso(msg.get("timestamp"))
+        if ts is not None:
+            return ts
+    return None
+
+
+def _is_stale_inbound(convo: dict[str, Any], stage: str) -> bool:
+    """True if the last inbound is older than REPLY_STALE_DAYS with no ongoing
+    process. Conversations mid-interview (ready_to_schedule / awaiting_feedback
+    / resume_shared) are never considered stale -- replying is still expected.
+    """
+    if REPLY_STALE_DAYS <= 0:
+        return False
+    intent_tag = _intent_tag(convo)
+    if intent_tag in _ONGOING_INTENT_TAGS:
+        return False
+    if stage in {"resume_shared", "ready_to_schedule", "awaiting_feedback"}:
+        return False
+    last_in = _last_inbound_timestamp(convo)
+    if last_in is None:
+        return False
+    cutoff = datetime.now(timezone.utc) - timedelta(days=REPLY_STALE_DAYS)
+    return last_in < cutoff
+
+
 RESUME_SHARED_MARKERS = (
     "resume",
     "cv",
@@ -758,13 +810,17 @@ def _needs_reply(convo: dict[str, Any], regenerate: bool) -> bool:
     if not reply or reply.get("status") == "error":
         # Even for missing/errored drafts, refuse to regenerate if I already spoke last.
         return not _user_was_last_sender(convo)
-    if reply.get("status") in (
-        "approved",
-        "rejected",
-        "sent",
-        "manually_handled",
-        "abstained",
-    ):
+    reply_status = reply.get("status")
+    if reply_status in ("approved", "rejected", "sent", "manually_handled"):
+        return False
+    # Stale-inbound abstains should re-evaluate when a new message lands so
+    # the recruiter pinging again immediately reopens the draft.
+    if reply_status == "abstained":
+        abstain_reason = str(reply.get("abstain_reason") or "")
+        msg_count = len(convo.get("messages", []))
+        reply_msg_count = reply.get("message_count_at_generation", 0)
+        if abstain_reason.startswith("stale_inbound") and msg_count != reply_msg_count:
+            return True
         return False
     # If the thread's last message is mine, skip: they need to respond first.
     if _user_was_last_sender(convo):
@@ -830,8 +886,51 @@ async def generate_all_replies(
         )
         print(f"  abstain({intent.get('tag')}): {other}")
 
-    to_generate = [c for c in recruiter_convos if not _should_abstain(c)]
-    print(f"Generating replies for {len(to_generate)} conversations ({len(abstain_now)} abstained)")
+    # Stale-inbound abstain. Covers the case where a recruiter pinged weeks ago,
+    # we never replied, and the draft has been sitting in review. Replying that
+    # late reads as automated. Exemptions live inside `_is_stale_inbound`.
+    stale_now: list[dict[str, Any]] = []
+    for convo in recruiter_convos:
+        if _should_abstain(convo):
+            continue
+        stage = derive_conversation_stage(convo)
+        if not _is_stale_inbound(convo, stage):
+            continue
+        last_in = _last_inbound_timestamp(convo)
+        age_days = (
+            (datetime.now(timezone.utc) - last_in).days if last_in else None
+        )
+        intent = convo.get("intent") or {}
+        convo["reply"] = {
+            "status": "abstained",
+            "tier": "abstain",
+            "text": "",
+            "abstain_reason": f"stale_inbound_{age_days}d" if age_days is not None else "stale_inbound",
+            "intent_tag": intent.get("tag"),
+            "intent_confidence": intent.get("confidence"),
+            "message_count_at_generation": len(convo.get("messages", [])),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "stage": stage,
+            "last_inbound_at": last_in.isoformat() if last_in else None,
+        }
+        stale_now.append(convo)
+        other = next(
+            (p.get("name") for p in convo.get("participants", []) if p.get("name") != USER_NAME),
+            "?",
+        )
+        print(f"  abstain(stale_inbound={age_days}d): {other}")
+
+    skip_urns = {
+        c.get("conversationUrn") for c in abstain_now + stale_now
+    }
+    to_generate = [
+        c for c in recruiter_convos
+        if c.get("conversationUrn") not in skip_urns
+    ]
+    print(
+        f"Generating replies for {len(to_generate)} conversations "
+        f"({len(abstain_now)} dead-end, {len(stale_now)} stale)"
+    )
     recruiter_convos = to_generate
 
     client = AsyncOpenAI()

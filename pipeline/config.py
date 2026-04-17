@@ -85,6 +85,12 @@ SCORE_REVIEW: int = 50
 FOLLOWUP_1_DAYS: int = 4
 FOLLOWUP_2_DAYS: int = 9
 
+# Reply freshness (calendar days). If the last inbound message is older than
+# this AND the intent does not indicate an ongoing engagement (ready_to_schedule,
+# awaiting_their_feedback, resume_shared) the draft is abstained instead of
+# generated -- replying to a two-week-old ping reads as automated.
+REPLY_STALE_DAYS: int = int(os.getenv("REPLY_STALE_DAYS", "7"))
+
 MAX_CONCURRENT: int = 8
 
 # User identity (used in safety validation and reply templates)

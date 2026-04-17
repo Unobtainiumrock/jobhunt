@@ -96,6 +96,23 @@ def _atomic_write_json(path: Path, payload: Any) -> None:
     tmp.replace(path)
 
 
+def _mark_lead_declined(urn: str, now_iso: str) -> None:
+    """Flip lead_states[urn].status to 'declined' so the follow-up scheduler
+    skips this thread. Silently no-ops when the state file is missing.
+    """
+    if not urn:
+        return
+    states: dict[str, Any] = _load_json(LEAD_STATES_FILE, {}) or {}
+    entry = states.get(urn) or {}
+    entry.update({
+        "status": "declined",
+        "updated_at": now_iso,
+        "marked_dead_at": now_iso,
+    })
+    states[urn] = entry
+    _atomic_write_json(LEAD_STATES_FILE, states)
+
+
 def _conversation_token(urn: str) -> str:
     """Short, stable prefix of the conversation URN tail used in chat."""
     tail = urn.rsplit(",", 1)[-1].rstrip(")")
@@ -138,6 +155,7 @@ def cmd_help() -> str:
         "/list [replies|followups] [N] - top-N drafts\n"
         "/approve &lt;token&gt; - mark draft approved\n"
         "/reject &lt;token&gt; - mark draft rejected\n"
+        "/dead &lt;token&gt; - mark thread dead (abstain, no more follow-ups)\n"
         "/help - this message\n\n"
         "<i>Tokens are the short prefixes shown by /list. Live sends are on\n"
         "by default; set LINKEDIN_SEND_ENABLED=0 in `.env` to pause dispatch.</i>"
@@ -280,6 +298,42 @@ def cmd_reject(args: list[str]) -> str:
     return _mutate_reply(args[0], "rejected")
 
 
+def cmd_dead(args: list[str]) -> str:
+    """Manual dead-end escape hatch.
+
+    Flags the thread as dead (abstained + intent.abstain=True) so the
+    pipeline stops regenerating drafts and the follow-up scheduler skips
+    it, even if subsequent classify runs wouldn't detect it.
+    """
+    if not args:
+        return "usage: /dead &lt;token&gt;"
+    token = args[0]
+    data = _load_json(CLASSIFIED_FILE, {"conversations": []})
+    convos = data.get("conversations", [])
+    draftable = [c for c in convos if _draftable(c)]
+    convo, err = _match_token(token, draftable)
+    if convo is None:
+        return err
+    now = datetime.now(timezone.utc).isoformat()
+    reply = convo.setdefault("reply", {})
+    reply["status"] = "abstained"
+    reply["abstain_reason"] = "manual_dead_end"
+    reply["marked_dead_at"] = now
+    intent = convo.setdefault("intent", {})
+    intent["abstain"] = True
+    intent["abstain_reason"] = "manual_dead_end"
+    intent["tag"] = "dead_end"
+    intent["marked_dead_at"] = now
+    _atomic_write_json(CLASSIFIED_FILE, data)
+    _mark_lead_declined(str(convo.get("conversationUrn") or ""), now)
+    name = _participant_name(convo)
+    return (
+        f"💀 <b>marked dead</b> — {name} "
+        f"(<code>{_conversation_token(convo['conversationUrn'])}</code>)\n\n"
+        "<i>Pipeline will no longer draft replies or follow-ups for this thread.</i>"
+    )
+
+
 COMMANDS = {
     "/help": lambda args: cmd_help(),
     "/start": lambda args: cmd_help(),
@@ -287,6 +341,7 @@ COMMANDS = {
     "/list": cmd_list,
     "/approve": cmd_approve,
     "/reject": cmd_reject,
+    "/dead": cmd_dead,
 }
 
 

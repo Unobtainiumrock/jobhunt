@@ -340,9 +340,12 @@ export async function sendMessage(opts) {
       result.ok = true;
       result.mode_used = 'dom';
       result.verified = Boolean(verified.verified);
-      if (!result.verified) {
-        result.error = 'send_unverified_within_timeout';
-      }
+      // Unverified-but-sent is NOT a failure: the click fired and LinkedIn
+      // accepted the compose. The verifier just didn't find the message
+      // mirrored back in the thread within the timeout, which happens when
+      // the thread feed re-hydrates slowly. Don't poison result.error --
+      // the receiver treats any truthy error as a send failure and alerts.
+      result.error = null;
       return result;
     } catch (err) {
       result.attempts.push({ step: 'dom_error', error: err.message });
