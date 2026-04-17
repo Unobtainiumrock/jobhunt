@@ -195,6 +195,7 @@ def evaluate_convo(convo: dict[str, Any], policy: GeoPolicy) -> GeoVerdict:
     now = datetime.now(timezone.utc).isoformat()
 
     if blocked_hits:
+        # "Remote, HQ in $BLOCKED" is still fine if we're remote-ok.
         if work_mode == "remote" and not any(
             tok in haystack for tok in _ONSITE_TOKENS
         ) and not any(tok in haystack for tok in _HYBRID_TOKENS):
@@ -202,6 +203,21 @@ def evaluate_convo(convo: dict[str, Any], policy: GeoPolicy) -> GeoVerdict:
                 verdict="compatible",
                 work_mode="remote",
                 reason=f"explicitly remote; {blocked_hits[0]} mentioned but not required on-site",
+                location_text=loc_field,
+                matched_allowed=allowed_hits,
+                matched_blocked=blocked_hits,
+                evaluated_at=now,
+            )
+        # "Sunnyvale, CA or Austin, TX" -- the user can pick the allowed city.
+        # Only veto when the thread exclusively points at a blocked region.
+        if allowed_hits:
+            return GeoVerdict(
+                verdict="compatible",
+                work_mode=work_mode,
+                reason=(
+                    f"thread mentions both allowed ({allowed_hits[0]}) and "
+                    f"blocked ({blocked_hits[0]}); user can pick allowed"
+                ),
                 location_text=loc_field,
                 matched_allowed=allowed_hits,
                 matched_blocked=blocked_hits,
