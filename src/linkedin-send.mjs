@@ -145,17 +145,17 @@ async function _focusAndType(evaluate, text) {
       await new Promise(r => setTimeout(r, 250));
 
       const observed = box.textContent || "";
-      // textContent flattens <p> tags: paragraph breaks in the typed text
-      // do not appear in the compose box's textContent. Compare whitespace-
-      // normalized prefixes so replies like "Name,\\n\\nBody..." still verify.
-      const norm = (s) => s.replace(/\\s+/g, " ").trim();
-      const normObs = norm(observed);
-      const normExp = norm(raw).slice(0, Math.min(40, raw.length));
+      // textContent concatenates <p> tags with no separator, so "Name,\\n\\nBody"
+      // becomes "Name,Body" in the compose box. Strip ALL whitespace on both
+      // sides before comparing so paragraph structure does not matter.
+      const strip = (s) => s.replace(/\\s+/g, "");
+      const stripObs = strip(observed);
+      const stripExp = strip(raw).slice(0, Math.min(40, strip(raw).length));
       return JSON.stringify({
-        ok: normObs.includes(normExp),
+        ok: stripObs.length > 0 && stripExp.length > 0 && stripObs.includes(stripExp),
         observed_length: observed.length,
-        observed_preview: normObs.slice(0, 80),
-        expected_preview: normExp,
+        observed_preview: observed.slice(0, 120),
+        expected_preview: stripExp,
       });
     })()
   `;
