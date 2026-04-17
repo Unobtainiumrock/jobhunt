@@ -737,22 +737,41 @@ def _last_inbound_timestamp(convo: dict[str, Any]) -> datetime | None:
 
 
 def _is_stale_inbound(convo: dict[str, Any], stage: str) -> bool:
-    """True if the last inbound is older than REPLY_STALE_DAYS with no ongoing
-    process. Conversations mid-interview (ready_to_schedule / awaiting_feedback
-    / resume_shared) are never considered stale -- replying is still expected.
+    """True if the last inbound is older than REPLY_STALE_DAYS and the
+    conversation does NOT show a real ongoing engagement on our side.
+
+    Exemption rule: only skip the stale gate when we have actually
+    participated (user_turn_count > 0) AND the stage/intent indicates we are
+    mid-process. A recruiter that pinged 14 days ago with an "interested in
+    scheduling" tone but which we never answered is NOT an ongoing process --
+    that's a cold thread we let lapse, and replying now reads as automated.
     """
     if REPLY_STALE_DAYS <= 0:
-        return False
-    intent_tag = _intent_tag(convo)
-    if intent_tag in _ONGOING_INTENT_TAGS:
-        return False
-    if stage in {"resume_shared", "ready_to_schedule", "awaiting_feedback"}:
         return False
     last_in = _last_inbound_timestamp(convo)
     if last_in is None:
         return False
     cutoff = datetime.now(timezone.utc) - timedelta(days=REPLY_STALE_DAYS)
-    return last_in < cutoff
+    if last_in >= cutoff:
+        return False
+
+    messages = convo.get("messages") or []
+    user_turn_count = sum(
+        1 for m in messages
+        if any(
+            tok in (m.get("sender") or "").lower()
+            for tok in (t for t in USER_NAME.lower().split() if len(t) >= 3)
+        )
+    )
+    if user_turn_count == 0:
+        return True
+
+    intent_tag = _intent_tag(convo)
+    if intent_tag in _ONGOING_INTENT_TAGS:
+        return False
+    if stage in {"resume_shared", "ready_to_schedule", "awaiting_feedback"}:
+        return False
+    return True
 
 
 RESUME_SHARED_MARKERS = (
