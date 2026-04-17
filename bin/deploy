@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Deploy linkedin-leads to Hetzner.
+#
+# Canonical deploy entry point. Use this instead of retyping the one-liner.
+# Requires: SSH access to the `hetzner` host alias, and deploy-key auth on
+# /opt/linkedin-leads (set up via github-deploy SSH config + read-only GH key).
+#
+# Workflow:
+#   1. git push origin main              # ship code to GitHub
+#   2. ./bin/deploy                       # pull + rebuild + restart on Hetzner
+#
+# Safe: git pull --ff-only aborts on divergent history instead of merging.
+# docker compose up -d --build is idempotent — no-op when nothing changed.
+set -euo pipefail
+
+ssh hetzner 'set -euo pipefail
+  cd /opt/linkedin-leads
+  echo ">>> git pull"
+  git pull --ff-only
+  echo ">>> docker compose up -d --build"
+  docker compose up -d --build
+  echo ">>> services"
+  docker compose ps --format "table {{.Service}}\t{{.Status}}"
+'

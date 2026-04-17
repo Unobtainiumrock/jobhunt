@@ -1,0 +1,38 @@
+---
+description: Linkedin-leads deploy workflow — code changes require push + bin/deploy, not just commit. Read before editing any source file.
+alwaysApply: true
+---
+
+# linkedin-leads deploy workflow
+
+**Production runs on Hetzner, not the laptop.** Code lives at
+`/opt/linkedin-leads` on host `hetzner` (SSH alias), checked out from
+`github.com/Unobtainiumrock/linkedin-leads` via read-only deploy key.
+
+## Shipping a code change is TWO steps, not one
+
+```bash
+git push origin main    # ship to GitHub
+./bin/deploy            # pull + rebuild + restart on Hetzner
+```
+
+If you only do step 1, nothing changes in prod. `./bin/deploy` wraps
+`ssh hetzner 'cd /opt/linkedin-leads && git pull --ff-only && docker compose up -d --build'`.
+It is idempotent and safe to re-run.
+
+## Do NOT
+
+- `rsync` / `scp` app code to Hetzner (the rsync path is retired).
+- Edit files directly on `/opt/linkedin-leads` via SSH (next `git pull`
+  will clobber them with a tree-conflict). Push through GitHub instead.
+- Weaken the safety rails (`LINKEDIN_SEND_ENABLED` gate,
+  `SENDER_RATE_LIMIT`, follow-up cap of 2, abstain-on-dead-end logic)
+  without explicit user approval.
+
+## Remember
+
+- `.env` is gitignored. Laptop copy and `/opt/linkedin-leads/.env` on
+  Hetzner are hand-synced with `scp` when values change.
+- `profile/user_profile.yaml` is gitignored but MUST exist on Hetzner
+  or `score_leads` crashes. If missing: `scp` it over, then rebuild.
+- See `AGENTS.md` at repo root for full project context.
