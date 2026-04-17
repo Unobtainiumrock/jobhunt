@@ -34,6 +34,7 @@ from pipeline.config import (
     EMAIL_ACTIVITY_SYNC_DAYS,
 )
 from pipeline.email_context import email_sidebar_for_urn, email_thread_last_activity_ms
+from pipeline.followup_scheduler import load_lead_states
 from pipeline.safety import (
     build_system_prompt, validate_outbound, wrap_conversation_context,
 )
@@ -1054,6 +1055,49 @@ async def generate_all_replies(
         and "score" in c
         and (target_urn is None or c.get("conversationUrn") == target_urn)
     ]
+
+    # Durable declined latch: any recruiter whose lead_states.json entry is
+    # "declined" gets a forced abstain, even if the classifier's dead_end
+    # signal is temporarily missing (e.g. email_ingest failed this run).
+    # Overwrites any existing draft/auto_send reply to prevent accidental send.
+    lead_states = load_lead_states()
+    latched_now = 0
+    for convo in all_recruiter:
+        thread_id = str(
+            convo.get("external_thread_id") or convo.get("conversationUrn") or ""
+        )
+        if not thread_id:
+            continue
+        if (lead_states.get(thread_id) or {}).get("status") != "declined":
+            continue
+        reply = convo.get("reply") or {}
+        if (
+            reply.get("status") == "abstained"
+            and str(reply.get("abstain_reason") or "").startswith("lead_declined")
+        ):
+            continue
+        intent = {**(convo.get("intent") or {})}
+        intent["abstain"] = True
+        intent["abstain_reason"] = "lead_declined_latched"
+        convo["intent"] = intent
+        convo["reply"] = {
+            "status": "abstained",
+            "tier": "abstain",
+            "text": "",
+            "abstain_reason": "lead_declined_latched",
+            "intent_tag": intent.get("tag"),
+            "intent_confidence": intent.get("confidence"),
+            "message_count_at_generation": len(convo.get("messages", [])),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        latched_now += 1
+        other = next(
+            (p.get("name") for p in convo.get("participants", []) if p.get("name") != USER_NAME),
+            "?",
+        )
+        print(f"  abstain(lead_declined_latched): {other}")
+    if latched_now:
+        print(f"  {latched_now} convo(s) force-abstained via lead_states latch")
 
     # Retroactive stale sweep: any existing draft / auto_send reply whose
     # latest inbound is older than REPLY_STALE_DAYS (and lacks an ongoing

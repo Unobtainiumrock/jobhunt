@@ -49,6 +49,15 @@ TELEGRAM_CHAT_ID = os.getenv("HEALTH_TELEGRAM_CHAT_ID", "")
 WEBHOOK_URL = os.getenv("HEALTH_WEBHOOK_URL", "")
 LISTENER_HEALTH_URL = os.getenv("HEALTH_LISTENER_URL", "").strip()
 
+GMAIL_INGEST_ENABLED = os.getenv("GMAIL_INGEST_ENABLED", "0").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+GMAIL_STALE_HOURS = int(os.getenv("GMAIL_STALE_HOURS", "24"))
+GMAIL_PROBE_INTERVAL = int(os.getenv("HEALTH_GMAIL_PROBE_INTERVAL", "900"))
+
 CHECKPOINT_PATTERNS = [
     "/checkpoint/",
     "/login",
@@ -144,6 +153,88 @@ def check_qdrant() -> CheckResult:
     return CheckResult("qdrant", False, "Qdrant returned unexpected response")
 
 
+_gmail_probe_cache: dict[str, object] = {"at": 0.0, "result": None}
+
+
+def check_gmail_token() -> CheckResult:
+    """Probe Gmail via users.getProfile. Healthy when ingest is disabled.
+
+    Rate-limited to one real probe per GMAIL_PROBE_INTERVAL seconds; cached
+    result returned in between. Avoids burning 1 quota call per healthdog tick.
+    """
+    if not GMAIL_INGEST_ENABLED:
+        return CheckResult("gmail_token", True, "GMAIL_INGEST_ENABLED=0 (skipped)")
+
+    # Import inside function so a missing pipeline dep in a barebones container
+    # never crashes healthdog startup.
+    try:
+        from pipeline.config import GOOGLE_TOKEN_GMAIL_FILE
+    except Exception as exc:
+        return CheckResult(
+            "gmail_token", False, f"pipeline.config import failed: {exc}"
+        )
+
+    if not Path(GOOGLE_TOKEN_GMAIL_FILE).exists():
+        return CheckResult(
+            "gmail_token",
+            False,
+            "token file missing — run `npm run email:oauth` on laptop",
+        )
+
+    now = time.time()
+    cached = _gmail_probe_cache.get("result")
+    if cached and (now - float(_gmail_probe_cache.get("at") or 0.0)) < GMAIL_PROBE_INTERVAL:
+        return cached  # type: ignore[return-value]
+
+    try:
+        from pipeline.email_gmail import build_gmail_service
+        service = build_gmail_service()
+        profile = service.users().getProfile(userId="me").execute()
+        email = profile.get("emailAddress", "?")
+        result = CheckResult("gmail_token", True, f"OAuth OK ({email})")
+    except Exception as exc:
+        msg = str(exc)
+        # google.auth.exceptions.RefreshError carries "invalid_grant" when the
+        # refresh token is revoked/expired (the weekly Testing-mode case).
+        if "invalid_grant" in msg.lower() or "RefreshError" in type(exc).__name__:
+            detail = "refresh token revoked — re-auth required"
+        elif "HttpError" in type(exc).__name__:
+            detail = f"Gmail API error: {msg[:120]}"
+        else:
+            detail = f"{type(exc).__name__}: {msg[:120]}"
+        result = CheckResult("gmail_token", False, detail)
+
+    _gmail_probe_cache["at"] = now
+    _gmail_probe_cache["result"] = result
+    return result
+
+
+def check_email_ingest_fresh() -> CheckResult:
+    """Alert if email_threads.json mtime is older than GMAIL_STALE_HOURS."""
+    if not GMAIL_INGEST_ENABLED:
+        return CheckResult("email_ingest", True, "GMAIL_INGEST_ENABLED=0 (skipped)")
+    try:
+        from pipeline.config import EMAIL_THREADS_FILE
+    except Exception as exc:
+        return CheckResult(
+            "email_ingest", False, f"pipeline.config import failed: {exc}"
+        )
+    path = Path(EMAIL_THREADS_FILE)
+    if not path.exists():
+        # gmail_token check already pages when the token is missing; don't
+        # double-alert here. Treat no-file as "hasn't run yet" (healthy).
+        return CheckResult("email_ingest", True, "no email_threads.json yet")
+    age_s = time.time() - path.stat().st_mtime
+    age_h = age_s / 3600
+    if age_s > GMAIL_STALE_HOURS * 3600:
+        return CheckResult(
+            "email_ingest",
+            False,
+            f"ingest stale: last run {age_h:.1f}h ago (threshold {GMAIL_STALE_HOURS}h)",
+        )
+    return CheckResult("email_ingest", True, f"fresh ({age_h:.1f}h ago)")
+
+
 def check_listener() -> CheckResult:
     if LISTENER_HEALTH_URL:
         base = LISTENER_HEALTH_URL.rstrip("/")
@@ -170,7 +261,14 @@ def check_listener() -> CheckResult:
 
 
 def run_checks() -> list[CheckResult]:
-    return [check_cdp(), check_linkedin_session(), check_qdrant(), check_listener()]
+    return [
+        check_cdp(),
+        check_linkedin_session(),
+        check_qdrant(),
+        check_listener(),
+        check_gmail_token(),
+        check_email_ingest_fresh(),
+    ]
 
 
 def format_report(results: list[CheckResult]) -> str:

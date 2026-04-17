@@ -108,6 +108,8 @@ services:
       - desktop
       - qdrant
       - listener
+    volumes:
+      - app-data:/app/data:ro
     environment:
       - CDP_URL=http://desktop:9223
       - QDRANT_URL=http://qdrant:6333
@@ -117,6 +119,9 @@ services:
       - HEALTH_WEBHOOK_URL=${HEALTH_WEBHOOK_URL:-}
       - HEALTH_CHECK_INTERVAL=${HEALTH_CHECK_INTERVAL:-60}
       - HEALTH_ALERT_REMIND_INTERVAL=${HEALTH_ALERT_REMIND_INTERVAL:-1800}
+      - GMAIL_INGEST_ENABLED=${GMAIL_INGEST_ENABLED:-0}
+      - GMAIL_STALE_HOURS=${GMAIL_STALE_HOURS:-24}
+      - HEALTH_GMAIL_PROBE_INTERVAL=${HEALTH_GMAIL_PROBE_INTERVAL:-900}
     restart: unless-stopped
 
 volumes:

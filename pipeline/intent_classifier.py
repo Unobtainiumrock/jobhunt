@@ -45,6 +45,7 @@ from openai import AsyncOpenAI
 
 from pipeline.config import CLASSIFIED_FILE, FAST_MODEL, MAX_CONCURRENT, USER_NAME
 from pipeline.email_context import email_blob_for_intent_hash, email_sidebar_for_urn
+from pipeline.followup_scheduler import load_lead_states, save_lead_states
 
 IntentTag = Literal[
     "awaiting_their_move",
@@ -260,10 +261,54 @@ async def classify_intents(
         )
         print(f"  {other:30} -> {result['tag']:25} ({result['confidence']:.2f})")
 
+    _latch_declined(conversations)
+
     with open(CLASSIFIED_FILE, "w") as f:
         json.dump(data, f, indent=2)
         f.write("\n")
     print(f"Updated {CLASSIFIED_FILE}")
+
+
+def _latch_declined(conversations: list[dict[str, Any]]) -> None:
+    """Write durable declined status for any recruiter convo tagged dead_end.
+
+    Once written, declined is not downgraded here — only the operator review UI
+    (or a future unlatch path) can clear it. New recruiter conversations get a
+    new URN and therefore a clean state, so this does not poison future leads
+    from the same recruiter.
+    """
+    states = load_lead_states()
+    latched = 0
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for convo in conversations:
+        if convo.get("classification", {}).get("category") != "recruiter":
+            continue
+        intent = convo.get("intent") or {}
+        if intent.get("tag") != "dead_end":
+            continue
+        thread_id = str(
+            convo.get("external_thread_id") or convo.get("conversationUrn") or ""
+        )
+        if not thread_id:
+            continue
+        existing = states.get(thread_id) or {}
+        if existing.get("status") == "declined":
+            continue
+        urn = str(convo.get("conversationUrn") or "")
+        source = "email" if urn and email_sidebar_for_urn(urn).strip() else "linkedin"
+        rationale = str(intent.get("rationale") or "")[:200]
+        states[thread_id] = {
+            **existing,
+            "status": "declined",
+            "updated_at": now_iso,
+            "closed_by": "intent_classifier",
+            "closed_reason": rationale,
+            "closed_source": source,
+        }
+        latched += 1
+    if latched:
+        save_lead_states(states)
+        print(f"Latched {latched} lead(s) to declined status.")
 
 
 def main() -> None:

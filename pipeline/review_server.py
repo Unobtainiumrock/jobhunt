@@ -956,6 +956,26 @@ def _mark_lead_declined(urn: str, now_iso: str) -> None:
         handle.write("\n")
 
 
+def _unmark_lead_declined(urn: str) -> bool:
+    """Clear a 'declined' latch so the thread can be re-drafted on next
+    pipeline run. Returns True if a latch was cleared.
+    """
+    if not urn or not LEAD_STATE_FILE.exists():
+        return False
+    try:
+        states = _load_json(LEAD_STATE_FILE)
+    except json.JSONDecodeError:
+        return False
+    entry = states.get(urn) or {}
+    if entry.get("status") != "declined":
+        return False
+    del states[urn]
+    with open(LEAD_STATE_FILE, "w") as handle:
+        json.dump(states, handle, indent=2)
+        handle.write("\n")
+    return True
+
+
 def _load_records(directory: Path) -> list[dict[str, Any]]:
     if not directory.exists():
         return []
@@ -1504,6 +1524,23 @@ class ReviewHandler(BaseHTTPRequestHandler):
             elif action == "reject":
                 convo["reply"]["status"] = "rejected"
                 convo["reply"]["rejected_at"] = datetime.now(timezone.utc).isoformat()
+            elif action == "reopen":
+                # Clear a declined latch so this thread is eligible for a
+                # fresh draft on the next pipeline run. Drops the existing
+                # abstain reply and flips intent.abstain off; the classifier
+                # re-runs against current tail + email because we reset its
+                # input_hash.
+                cleared = _unmark_lead_declined(urn)
+                intent = convo.get("intent") or {}
+                intent.pop("abstain_reason", None)
+                intent["abstain"] = False
+                intent["input_hash"] = ""
+                convo["intent"] = intent
+                convo.pop("reply", None)
+                if not cleared:
+                    # Still reset convo-level state; lead_states simply had
+                    # no entry (e.g. old mark_dead before latching shipped).
+                    pass
             elif action == "mark_dead":
                 # Manual dead-end escape hatch: the operator knows this thread
                 # is dead from out-of-band context (email rejection, verbal
