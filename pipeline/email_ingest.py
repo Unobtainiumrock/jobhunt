@@ -11,13 +11,15 @@ Requires:
   data/google_token_gmail.json (created on first auth; separate from Calendar token)
 
 Env (see pipeline/config.py):
-  GMAIL_INGEST_ENABLED, GMAIL_QUERY, GMAIL_MAX_MESSAGES, GMAIL_SELF_EMAIL
+  GMAIL_INGEST_ENABLED, GMAIL_QUERY, GMAIL_MAX_MESSAGES, GMAIL_SELF_EMAIL,
+  GMAIL_HEADLESS_SKIP (when 1: skip if token missing — use on Docker after laptop OAuth)
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -28,6 +30,8 @@ from pipeline.config import (
     EMAIL_LINK_OVERRIDES_FILE,
     EMAIL_SYNC_STATE_FILE,
     EMAIL_THREADS_FILE,
+    GOOGLE_CREDENTIALS_FILE,
+    GOOGLE_TOKEN_GMAIL_FILE,
     GMAIL_INGEST_ENABLED,
     GMAIL_MAX_MESSAGES,
     GMAIL_QUERY,
@@ -56,6 +60,29 @@ def _load_classified() -> dict[str, Any]:
 def ingest(*, dry_run: bool, force: bool) -> int:
     if not force and not GMAIL_INGEST_ENABLED:
         print("Gmail ingest skipped (GMAIL_INGEST_ENABLED not set).")
+        return 0
+
+    if not GOOGLE_CREDENTIALS_FILE.exists():
+        print(
+            "Gmail ingest skipped: missing data/google_credentials.json "
+            "(OAuth desktop client JSON from Google Cloud Console).",
+            file=sys.stderr,
+        )
+        return 0
+
+    headless_skip = os.getenv("GMAIL_HEADLESS_SKIP", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if headless_skip and not GOOGLE_TOKEN_GMAIL_FILE.exists():
+        print(
+            "Gmail ingest skipped: GMAIL_HEADLESS_SKIP is set and "
+            "data/google_token_gmail.json is missing. Run OAuth once on a machine "
+            "with a browser: python -m pipeline.email_ingest --force, then copy "
+            "the token file onto this host's app-data volume.",
+            file=sys.stderr,
+        )
         return 0
 
     service = build_gmail_service()

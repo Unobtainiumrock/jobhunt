@@ -31,8 +31,9 @@ from pipeline.config import (
     CLASSIFIED_FILE, PROFILE_FILE, TEMPLATES_DIR,
     GENERATION_MODEL, MAX_CONCURRENT, USER_NAME, USER_PHONE, USER_WEBSITE,
     SCORE_AUTO_REPLY, SCORE_REVIEW, REPLY_STALE_DAYS,
+    EMAIL_ACTIVITY_SYNC_DAYS,
 )
-from pipeline.email_context import email_sidebar_for_urn
+from pipeline.email_context import email_sidebar_for_urn, email_thread_last_activity_ms
 from pipeline.safety import (
     build_system_prompt, validate_outbound, wrap_conversation_context,
 )
@@ -117,6 +118,15 @@ clause, not a sentence. Example: "I've built similar systems before". Not
 - Use them only if they are directly relevant to the current recruiter message.
 - Never dump retrieved context back verbatim.
 - Prefer one precise detail over multiple weak references.
+
+## LINKED EMAIL (when present)
+- Same human as this thread; may include rejections, interview loop updates, \
+or scheduling that never mirrored on LinkedIn.
+- Never pitch, chase, or schedule as if the opportunity is live when email \
+already rejected or closed the loop. Acknowledge reality tersely or abstain \
+in spirit (short, no false hope).
+- When email advances the process (next round, homework, panel time), align \
+your reply with that stage; do not contradict email facts.
 
 ## TONE
 {tone}. Terse > verbose. If the conversation is casual, match it.
@@ -794,6 +804,17 @@ def _is_stale_inbound(convo: dict[str, Any], stage: str) -> bool:
     cutoff = datetime.now(timezone.utc) - timedelta(days=REPLY_STALE_DAYS)
     if last_in >= cutoff:
         return False
+
+    urn = str(convo.get("conversationUrn") or "")
+    act_ms = email_thread_last_activity_ms(urn) if urn else None
+    if act_ms and act_ms > 0:
+        act_dt = datetime.fromtimestamp(act_ms / 1000.0, tz=timezone.utc)
+        email_cutoff = datetime.now(timezone.utc) - timedelta(
+            days=EMAIL_ACTIVITY_SYNC_DAYS,
+        )
+        if act_dt >= email_cutoff:
+            # Process may continue off LinkedIn; do not treat LI silence as stale.
+            return False
 
     messages = convo.get("messages") or []
     user_turn_count = sum(

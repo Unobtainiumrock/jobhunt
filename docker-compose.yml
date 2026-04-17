@@ -41,6 +41,13 @@ services:
       - CDP_URL=http://desktop:9223
       - QDRANT_URL=http://qdrant:6333
       - LISTENER_HEALTH_PORT=3765
+      - LINKEDIN_SCRAPE_DAYS=${LINKEDIN_SCRAPE_DAYS:-7}
+      - GMAIL_INGEST_ENABLED=${GMAIL_INGEST_ENABLED:-0}
+      - GMAIL_QUERY=${GMAIL_QUERY:-newer_than:14d}
+      - GMAIL_MAX_MESSAGES=${GMAIL_MAX_MESSAGES:-60}
+      - GMAIL_SELF_EMAIL=${GMAIL_SELF_EMAIL:-}
+      # Skip Gmail when token not on volume (OAuth needs a browser; do that on laptop).
+      - GMAIL_HEADLESS_SKIP=${GMAIL_HEADLESS_SKIP:-1}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - CLASSIFY_MODEL=${CLASSIFY_MODEL:-gpt-4o-mini}
       - GENERATION_MODEL=${GENERATION_MODEL:-gpt-4o-mini}

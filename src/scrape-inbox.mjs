@@ -4,10 +4,11 @@
  *
  * Connects to your authenticated Chrome session via CDP and pulls
  * messaging conversations + messages from the LinkedIn Voyager API.
- * Defaults to the last 2 weeks of activity, always including full messages.
+ * Defaults to the last week of activity (tighter than Gmail ingest).
+ * Override with LINKEDIN_SCRAPE_DAYS or --days.
  *
  * Usage:
- *   node src/scrape-inbox.mjs                        # last 2 weeks, all conversations
+ *   node src/scrape-inbox.mjs                        # default lookback (see LINKEDIN_SCRAPE_DAYS)
  *   node src/scrape-inbox.mjs --days 30              # last 30 days instead
  *   node src/scrape-inbox.mjs --count 100            # cap at 100 conversations
  *   node src/scrape-inbox.mjs --thread "Matthew"     # re-scrape only matching thread(s), merge into existing data
@@ -25,8 +26,16 @@ const DATA_DIR = path.join(__dirname, '..', 'data');
 const INBOX_FILE = path.join(DATA_DIR, 'inbox.json');
 
 const args = process.argv.slice(2);
+const envScrape = process.env.LINKEDIN_SCRAPE_DAYS;
+const DEFAULT_SCRAPE_DAYS = (() => {
+  if (envScrape == null || envScrape === '') return 7;
+  const n = parseInt(envScrape, 10);
+  return Number.isFinite(n) && n >= 1 ? n : 7;
+})();
 const DAYS_IDX = args.indexOf('--days');
-const LOOKBACK_DAYS = DAYS_IDX >= 0 ? parseInt(args[DAYS_IDX + 1] || '14') : 14;
+const LOOKBACK_DAYS = DAYS_IDX >= 0
+  ? parseInt(args[DAYS_IDX + 1] || String(DEFAULT_SCRAPE_DAYS), 10)
+  : DEFAULT_SCRAPE_DAYS;
 const COUNT_IDX = args.indexOf('--count');
 const MAX_CONVERSATIONS = COUNT_IDX >= 0 ? parseInt(args[COUNT_IDX + 1] || '200') : 200;
 const THREAD_IDX = args.indexOf('--thread');

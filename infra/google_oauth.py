@@ -6,12 +6,30 @@ Gmail scopes does not invalidate an existing calendar-only refresh token.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
+
+
+def _validate_oauth_client_json(credentials_path: Path) -> None:
+    """Reject service-account JSON; ``InstalledAppFlow`` needs user OAuth client."""
+    try:
+        data = json.loads(credentials_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return
+    if data.get("type") == "service_account":
+        print(
+            f"Error: {credentials_path} is a service account file.\n"
+            "Gmail needs an OAuth 2.0 **Desktop** client JSON (Create Credentials → "
+            "OAuth client ID → Desktop app → Download). Save it as "
+            f"{credentials_path}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def load_authorized_user_credentials(
@@ -37,6 +55,7 @@ def load_authorized_user_credentials(
                     file=sys.stderr,
                 )
                 sys.exit(1)
+            _validate_oauth_client_json(credentials_path)
             flow = InstalledAppFlow.from_client_secrets_file(
                 str(credentials_path), scopes
             )

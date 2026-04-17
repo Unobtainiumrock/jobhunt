@@ -69,8 +69,15 @@ TAIL_MESSAGES = 6
 INTENT_SYSTEM_PROMPT = f"""\
 You are classifying the conversational state of a LinkedIn recruiter thread for \
 {USER_NAME}. Read the final exchange and pick ONE tag. If a LINKED EMAIL block \
-is present, treat it as authoritative for rejections / scheduling / next steps \
-even when the LinkedIn thread has not caught up yet.
+is present, treat it as authoritative for rejections / scheduling / interview \
+updates / next steps even when the LinkedIn thread has not caught up yet.
+
+Email signals (examples, not exhaustive):
+- Rejection, role filled, pursuing other candidates, "not moving forward" → \
+prefer dead_end even if LinkedIn still looks warm.
+- Interview invite, loop update, take-home, offer, start date logistics → \
+use ready_to_schedule or awaiting_their_feedback / active_discussion to match \
+who owes the next move.
 
 Return strict JSON: {{"tag": "<tag>", "confidence": <0..1>, \
 "rationale": "<one sentence>"}}
@@ -84,11 +91,13 @@ recruiter acknowledged ("thanks, will review", thumbs-up, "circle back") but \
 hasn't decided yet. Respect their review time.
 - dead_end: Recruiter stated explicitly that nothing is available now, thanked \
 the user for reaching out, or said they'd reach out "if something comes up". \
-No active opportunity. ABSTAIN from replying unless they re-engage.
+No active opportunity. ABSTAIN from replying unless they re-engage. If email \
+clearly closes the process, choose dead_end even when LinkedIn omits that news.
 - active_discussion: Back-and-forth is alive about specific role/compensation/ \
 stack. Continue the exchange naturally.
 - ready_to_schedule: Recruiter asked for a call, availability, or resume share \
-in the most recent message. Prioritize scheduling next.
+in the most recent LinkedIn message OR clearly in recent linked email. \
+Prioritize scheduling next.
 - unclassified: Cannot confidently fit any tag above.
 
 Output ONLY the JSON object.
@@ -192,7 +201,7 @@ def _apply_intent(convo: dict[str, Any], result: dict[str, Any], input_hash: str
         "rationale": result.get("rationale", ""),
         "abstain": result["tag"] == "dead_end",
         "abstain_reason": (
-            "recruiter signaled no active opportunity"
+            "recruiter or linked email indicates no active opportunity"
             if result["tag"] == "dead_end"
             else None
         ),

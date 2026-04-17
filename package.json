@@ -23,6 +23,8 @@
     "replies:inspect": "python -m pipeline.generate_reply --inspect",
     "replies:purge-stale": "python -m pipeline.generate_reply --purge-stale",
     "email:ingest": "python -m pipeline.email_ingest",
+    "email:setup": "python -m pipeline.gmail_setup",
+    "email:oauth": "python -m pipeline.gmail_oauth",
     "intent": "python -m pipeline.intent_classifier",
     "intent:force": "python -m pipeline.intent_classifier --force",
     "followups": "python -m pipeline.followup_scheduler",

@@ -66,11 +66,17 @@ GMAIL_INGEST_ENABLED: bool = os.getenv("GMAIL_INGEST_ENABLED", "0").strip().lowe
     "true",
     "yes",
 )
+# Gmail pulls a longer tail than the default LinkedIn scrape window so
+# rejections / interview updates that only hit email still reach the model.
 GMAIL_QUERY: str = os.getenv("GMAIL_QUERY", "newer_than:14d")
-GMAIL_MAX_MESSAGES: int = int(os.getenv("GMAIL_MAX_MESSAGES", "40") or "40")
+GMAIL_MAX_MESSAGES: int = int(os.getenv("GMAIL_MAX_MESSAGES", "60") or "60")
 # Optional: your address on Gmail; used to ignore your own From when linking
 GMAIL_SELF_EMAIL: str = os.getenv("GMAIL_SELF_EMAIL", "").strip().lower()
-EMAIL_CONTEXT_MAX_CHARS: int = int(os.getenv("EMAIL_CONTEXT_MAX_CHARS", "900") or "900")
+EMAIL_CONTEXT_MAX_CHARS: int = int(os.getenv("EMAIL_CONTEXT_MAX_CHARS", "1200") or "1200")
+EMAIL_CONTEXT_LAST_N: int = int(os.getenv("EMAIL_CONTEXT_LAST_N", "6") or "6")
+# If the LinkedIn thread looks quiet but this lead's linked Gmail thread had
+# any message within this many days, skip stale_inbound abstention.
+EMAIL_ACTIVITY_SYNC_DAYS: int = int(os.getenv("EMAIL_ACTIVITY_SYNC_DAYS", "14") or "14")
 
 PROFILE_FILE = PROFILE_DIR / "user_profile.yaml"
 
