@@ -861,6 +861,45 @@ async def generate_all_replies(
         and (target_urn is None or c.get("conversationUrn") == target_urn)
     ]
 
+    # Retroactive stale sweep: any existing draft / auto_send reply whose
+    # latest inbound is older than REPLY_STALE_DAYS (and lacks an ongoing
+    # engagement signal) gets abstained, even if _needs_reply would otherwise
+    # skip it. Prevents the "draft has been sitting here for 3 weeks" bug.
+    retroactive_stale = 0
+    for convo in all_recruiter:
+        reply = convo.get("reply") or {}
+        if reply.get("status") not in ("draft", "auto_send"):
+            continue
+        if _should_abstain(convo):
+            continue
+        stage = derive_conversation_stage(convo)
+        if not _is_stale_inbound(convo, stage):
+            continue
+        last_in = _last_inbound_timestamp(convo)
+        age_days = (
+            (datetime.now(timezone.utc) - last_in).days if last_in else None
+        )
+        convo["reply"] = {
+            "status": "abstained",
+            "tier": "abstain",
+            "text": "",
+            "abstain_reason": f"stale_inbound_{age_days}d" if age_days is not None else "stale_inbound",
+            "intent_tag": (convo.get("intent") or {}).get("tag"),
+            "intent_confidence": (convo.get("intent") or {}).get("confidence"),
+            "message_count_at_generation": len(convo.get("messages", [])),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "stage": stage,
+            "last_inbound_at": last_in.isoformat() if last_in else None,
+        }
+        retroactive_stale += 1
+        other = next(
+            (p.get("name") for p in convo.get("participants", []) if p.get("name") != USER_NAME),
+            "?",
+        )
+        print(f"  retroactive abstain(stale_inbound={age_days}d): {other}")
+    if retroactive_stale:
+        print(f"  {retroactive_stale} existing draft(s) retroactively abstained as stale")
+
     recruiter_convos = [c for c in all_recruiter if _needs_reply(c, regenerate)]
     skipped = len(all_recruiter) - len(recruiter_convos)
     if skipped > 0:
