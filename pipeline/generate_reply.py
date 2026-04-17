@@ -8,11 +8,14 @@ LLM-generated dynamic content. Uses the safety module for identity protection.
 Usage:
   python -m pipeline.generate_reply
   python -m pipeline.generate_reply --urn "urn:li:msg_conversation:..."
+  python -m pipeline.generate_reply --audit-drafts
+  python -m pipeline.generate_reply --purge-stale
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import random
 import re
@@ -686,12 +689,49 @@ def _last_sender(convo: dict[str, Any]) -> str:
     return str(messages[-1].get("sender") or messages[-1].get("from") or "")
 
 
+def _user_name_tokens() -> list[str]:
+    return [t for t in USER_NAME.lower().split() if len(t) >= 3]
+
+
+def _sender_matches_user(sender: str) -> bool:
+    s = sender.lower()
+    if not s:
+        return False
+    return any(tok in s for tok in _user_name_tokens())
+
+
 def _user_was_last_sender(convo: dict[str, Any]) -> bool:
     last = _last_sender(convo).lower()
     if not last:
         return False
-    user_tokens = [token for token in USER_NAME.lower().split() if len(token) >= 3]
-    return any(token in last for token in user_tokens)
+    return _sender_matches_user(last)
+
+
+def _last_inbound_message(convo: dict[str, Any]) -> dict[str, Any] | None:
+    """Most recent message not attributed to the user (recruiter / system)."""
+    for msg in reversed(convo.get("messages") or []):
+        sender = str(msg.get("sender") or msg.get("from") or "")
+        if _sender_matches_user(sender):
+            continue
+        if sender.strip():
+            return msg
+    return None
+
+
+def _inbound_context_fingerprint(convo: dict[str, Any]) -> str:
+    """Stable hash of the latest inbound turn (sender + timestamp + text).
+
+    Used to detect thread drift when message_count is unchanged but the
+    scraper replaced or rewrote the tail (dedupe, re-sync, edited preview).
+    """
+    msg = _last_inbound_message(convo)
+    if not msg:
+        return "no_inbound"
+    sender = (msg.get("sender") or msg.get("from") or "").strip()
+    ts = str(msg.get("timestamp") or "")
+    text = re.sub(r"\s+", " ", (msg.get("text") or "").strip())[:1200]
+    raw = f"{sender}\n{ts}\n{text}".encode("utf-8", errors="replace")
+    return hashlib.sha256(raw).hexdigest()
 
 
 def _intent_tag(convo: dict[str, Any]) -> str:
@@ -722,18 +762,11 @@ def _parse_iso(value: Any) -> datetime | None:
 
 
 def _last_inbound_timestamp(convo: dict[str, Any]) -> datetime | None:
-    """Most recent message NOT sent by the user, parsed to aware datetime."""
-    for msg in reversed(convo.get("messages") or []):
-        sender = (msg.get("sender") or msg.get("from") or "").lower()
-        if not sender:
-            continue
-        user_tokens = [t for t in USER_NAME.lower().split() if len(t) >= 3]
-        if any(tok in sender for tok in user_tokens):
-            continue
-        ts = _parse_iso(msg.get("timestamp"))
-        if ts is not None:
-            return ts
-    return None
+    """Most recent inbound message time, or None."""
+    msg = _last_inbound_message(convo)
+    if not msg:
+        return None
+    return _parse_iso(msg.get("timestamp"))
 
 
 def _is_stale_inbound(convo: dict[str, Any], stage: str) -> bool:
@@ -758,10 +791,7 @@ def _is_stale_inbound(convo: dict[str, Any], stage: str) -> bool:
     messages = convo.get("messages") or []
     user_turn_count = sum(
         1 for m in messages
-        if any(
-            tok in (m.get("sender") or "").lower()
-            for tok in (t for t in USER_NAME.lower().split() if len(t) >= 3)
-        )
+        if _sender_matches_user(str(m.get("sender") or m.get("from") or ""))
     )
     if user_turn_count == 0:
         return True
@@ -848,7 +878,120 @@ def _needs_reply(convo: dict[str, Any], regenerate: bool) -> bool:
     reply_msg_count = reply.get("message_count_at_generation", 0)
     if msg_count != reply_msg_count:
         return True
+    stored_fp = reply.get("context_fingerprint")
+    if stored_fp and stored_fp != _inbound_context_fingerprint(convo):
+        return True
     return False
+
+
+def reconcile_draft_threads(conversations: list[dict[str, Any]]) -> dict[str, int]:
+    """Align pending reply drafts with the live thread tail.
+
+    - If the user already sent the last message (manual LinkedIn reply, etc.),
+      flip the draft to ``manually_handled`` so we never double-send.
+    - If ``context_fingerprint`` no longer matches the latest inbound turn,
+      bump ``message_count_at_generation`` so ``_needs_reply`` forces a regen
+      on this pipeline pass (same message count but edited / re-synced tail).
+    - Legacy drafts without a fingerprint: stamp the current tail once so we
+      can detect drift on subsequent runs without mass-regenerating today.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    stats = {"manually_handled": 0, "thread_drift": 0, "legacy_fp_stamped": 0}
+    for convo in conversations:
+        if convo.get("classification", {}).get("category") != "recruiter":
+            continue
+        reply = convo.get("reply")
+        if not reply or reply.get("status") not in ("draft", "auto_send"):
+            continue
+        if _user_was_last_sender(convo):
+            reply["status"] = "manually_handled"
+            reply["manually_handled_at"] = now
+            reply["manually_handled_reason"] = "user_was_last_sender"
+            convo["reply"] = reply
+            stats["manually_handled"] += 1
+            continue
+
+        msg_count = len(convo.get("messages", []))
+        cur_fp = _inbound_context_fingerprint(convo)
+        stored_fp = reply.get("context_fingerprint")
+        if stored_fp and stored_fp != cur_fp:
+            reply["message_count_at_generation"] = (msg_count - 1) if msg_count > 0 else -1
+            reply["thread_drift_detected_at"] = now
+            convo["reply"] = reply
+            stats["thread_drift"] += 1
+            continue
+
+        if not stored_fp:
+            reply["context_fingerprint"] = cur_fp
+            convo["reply"] = reply
+            stats["legacy_fp_stamped"] += 1
+
+    return stats
+
+
+def audit_draft_threads(target_urn: str | None = None) -> None:
+    """Print a cross-check report for operator review (no writes)."""
+    if not CLASSIFIED_FILE.exists():
+        print("Error: classified inbox missing.", file=sys.stderr)
+        sys.exit(1)
+    with open(CLASSIFIED_FILE) as f:
+        data = json.load(f)
+
+    rows: list[tuple[str, str, str, str, str, str, str]] = []
+    for convo in data.get("conversations", []):
+        if convo.get("classification", {}).get("category") != "recruiter":
+            continue
+        if target_urn and convo.get("conversationUrn") != target_urn:
+            continue
+        reply = convo.get("reply") or {}
+        st = reply.get("status") or ""
+        if st not in ("draft", "auto_send"):
+            continue
+        other = next(
+            (p.get("name") for p in convo.get("participants", []) if p.get("name") != USER_NAME),
+            "?",
+        )
+        msgs = convo.get("messages") or []
+        msg_count = len(msgs)
+        try:
+            at_gen = int(reply.get("message_count_at_generation") or 0)
+        except (TypeError, ValueError):
+            at_gen = 0
+        user_last = _user_was_last_sender(convo)
+        cur_fp = _inbound_context_fingerprint(convo)
+        stored_fp = reply.get("context_fingerprint") or ""
+        fp_ok = (not stored_fp) or (stored_fp == cur_fp)
+        count_ok = msg_count == at_gen
+        flags: list[str] = []
+        if user_last:
+            flags.append("double_reply_risk_user_last")
+        if not count_ok:
+            flags.append("message_count_drift")
+        if stored_fp and not fp_ok:
+            flags.append("inbound_tail_changed")
+        if not stored_fp:
+            flags.append("legacy_no_fingerprint")
+        tail_bits: list[str] = []
+        for m in msgs[-2:]:
+            who = str(m.get("sender") or "?")[:22]
+            bit = (m.get("text") or "")[:72].replace("\n", " ")
+            tail_bits.append(f"[{who}] {bit}")
+        tail_preview = " | ".join(tail_bits)
+        rows.append((other, st, str(at_gen), str(msg_count), "ok" if fp_ok else "MISMATCH", ",".join(flags) or "clean", tail_preview))
+
+    if not rows:
+        print("No draft or auto_send replies to audit.")
+        return
+
+    print(f"Audited {len(rows)} pending reply draft(s)\n")
+    hdr = f"{'name':<28} {'status':<10} {'at_gen':>6} {'now':>4} {'fp':<8} flags"
+    print(hdr)
+    print("-" * len(hdr))
+    for name, st, ag, mc, fp, fl, tail in sorted(rows, key=lambda r: r[0].lower()):
+        print(f"{name[:28]:<28} {st:<10} {ag:>6} {mc:>4} {fp:<8} {fl}")
+        if tail:
+            clip = tail[:220] + ("…" if len(tail) > 220 else "")
+            print(f"    tail: {clip}")
 
 
 async def generate_all_replies(
@@ -873,6 +1016,10 @@ async def generate_all_replies(
     profile = _load_profile()
 
     conversations = data.get("conversations", [])
+    rec_stats = reconcile_draft_threads(conversations)
+    if any(rec_stats.values()):
+        parts = [f"{k}={v}" for k, v in rec_stats.items() if v]
+        print("  reconcile drafts: " + ", ".join(parts))
     all_recruiter = [
         c for c in conversations
         if c.get("classification", {}).get("category") == "recruiter"
@@ -1037,6 +1184,7 @@ async def generate_all_replies(
             "retrieved_profile_chunks": result.get("profile_hits", []),
             "retrieved_similar_messages": result.get("similar_messages", []),
             "message_count_at_generation": len(convo.get("messages", [])),
+            "context_fingerprint": _inbound_context_fingerprint(convo),
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "intent_tag": intent.get("tag"),
             "intent_confidence": intent.get("confidence"),
@@ -1103,14 +1251,15 @@ def _inspect_retrieval(target_urn: str | None = None) -> None:
 
 
 def purge_stale_drafts() -> int:
-    """Rewrite existing drafts to `manually_handled` when the user already replied.
+    """Rewrite drafts that are out of sync with the thread (same as first pass
+    of ``generate_all_replies``).
 
-    Walks the classified inbox. For each recruiter conversation whose stored draft
-    is still at `draft` / `auto_send`, checks whether the thread's most recent
-    message is from the user (indicating a manual send). If so, the draft is
-    flipped to `manually_handled` so the review UI stops surfacing it.
+    - User was last sender → ``manually_handled`` (avoid double replies).
+    - Inbound tail changed vs stored fingerprint → bump generation anchor so
+      the next ``generate_reply`` run regenerates.
+    - Legacy drafts → stamp ``context_fingerprint`` for drift detection.
 
-    Returns the number of drafts that were updated.
+    Returns the number of conversations where the user-last-sender rule fired.
     """
     if not CLASSIFIED_FILE.exists():
         print("Error: Run classify_leads first.", file=sys.stderr)
@@ -1119,32 +1268,18 @@ def purge_stale_drafts() -> int:
     with open(CLASSIFIED_FILE) as f:
         data = json.load(f)
 
-    purged = 0
-    now = datetime.now(timezone.utc).isoformat()
-    for convo in data.get("conversations", []):
-        reply = convo.get("reply")
-        if not reply:
-            continue
-        if reply.get("status") not in ("draft", "auto_send"):
-            continue
-        if not _user_was_last_sender(convo):
-            continue
-        other = next(
-            (p.get("name") for p in convo.get("participants", []) if p.get("name") != USER_NAME),
-            "?",
-        )
-        reply["status"] = "manually_handled"
-        reply["manually_handled_at"] = now
-        reply["manually_handled_reason"] = "user_was_last_sender"
-        purged += 1
-        print(f"  purged draft for {other}")
+    stats = reconcile_draft_threads(data.get("conversations", []))
+    for k, v in stats.items():
+        if v:
+            print(f"  {k}: {v}")
 
     with open(CLASSIFIED_FILE, "w") as f:
         json.dump(data, f, indent=2)
         f.write("\n")
 
-    print(f"Purged {purged} stale draft(s) where user was already the last sender.")
-    return purged
+    mh = stats.get("manually_handled", 0)
+    print(f"Updated {CLASSIFIED_FILE} (manually_handled={mh}, see counts above).")
+    return mh
 
 
 def main() -> None:
@@ -1152,12 +1287,16 @@ def main() -> None:
     regenerate = "--regenerate" in sys.argv
     inspect = "--inspect" in sys.argv
     purge_stale = "--purge-stale" in sys.argv
+    audit = "--audit-drafts" in sys.argv
     if "--urn" in sys.argv:
         idx = sys.argv.index("--urn")
         if idx + 1 < len(sys.argv):
             target = sys.argv[idx + 1]
     if inspect:
         _inspect_retrieval(target)
+        return
+    if audit:
+        audit_draft_threads(target_urn=target)
         return
     if purge_stale:
         purge_stale_drafts()
