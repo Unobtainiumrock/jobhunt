@@ -26,6 +26,7 @@ from pipeline.config import (
     CLASSIFIED_FILE, PROFILE_FILE, GENERATION_MODEL, MAX_CONCURRENT,
     SCORE_AUTO_REPLY, SCORE_REVIEW,
 )
+from pipeline.geo_filter import GeoPolicy, apply_verdict, evaluate_convo
 
 SCORING_SYSTEM = """\
 You are a job-opportunity scoring engine. Given a job seeker's profile and a \
@@ -247,6 +248,23 @@ async def score_all(rescore: bool = False) -> None:
         score["scored_at"] = datetime.now(timezone.utc).isoformat()
         convo["score"] = score
 
+    # Geographic gate: deterministic post-processing that demotes roles the
+    # LLM scored optimistically (e.g., on-site LA) but that violate the
+    # geo_policy in user_profile.yaml. Runs over EVERY recruiter convo, not
+    # just ones we just re-scored, so stale threads get re-tagged too.
+    policy = GeoPolicy.from_profile(profile)
+    geo_incompatible = 0
+    if policy.on_site_allowed or policy.on_site_blocked:
+        for convo in conversations:
+            if convo.get("classification", {}).get("category") != "recruiter":
+                continue
+            if "score" not in convo:
+                continue
+            verdict = evaluate_convo(convo, policy)
+            apply_verdict(convo, verdict)
+            if verdict.verdict == "incompatible":
+                geo_incompatible += 1
+
     elapsed = time.time() - t0
 
     auto_count = sum(1 for s in scores if s.get("action") == "auto_reply")
@@ -257,6 +275,7 @@ async def score_all(rescore: bool = False) -> None:
     print(f"  {auto_count} auto-reply (>={SCORE_AUTO_REPLY})")
     print(f"  {review_count} review ({SCORE_REVIEW}-{SCORE_AUTO_REPLY - 1})")
     print(f"  {gap_count} notify gaps (<{SCORE_REVIEW})")
+    print(f"  {geo_incompatible} demoted by geo_filter (on-site outside allowed regions)")
 
     with open(CLASSIFIED_FILE, "w") as f:
         json.dump(data, f, indent=2)
