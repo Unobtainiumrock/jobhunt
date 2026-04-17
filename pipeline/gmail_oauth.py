@@ -94,7 +94,7 @@ def main() -> int:
     auth_url, _ = flow.authorization_url(
         access_type="offline",
         prompt="consent",
-        include_granted_scopes=True,
+        include_granted_scopes="true",
     )
     print("Open this URL in a browser (Cursor built-in browser is fine):\n")
     print(auth_url)
