@@ -26,7 +26,11 @@
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     overscroll-behavior: none;
+    overscroll-behavior-x: none;
     touch-action: none;
+  }
+  .thread-tail, .draft, .editor textarea {
+    touch-action: pan-y;
   }
   body { display: flex; flex-direction: column; }
   header {
@@ -270,6 +274,10 @@
   if (tg) {
     tg.ready();
     tg.expand();
+    // Block Telegram's swipe-down-to-close; the up-swipe on cards is ours.
+    if (typeof tg.disableVerticalSwipes === "function") {
+      tg.disableVerticalSwipes();
+    }
   }
   const haptic = (kind) => {
     if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred(kind);
