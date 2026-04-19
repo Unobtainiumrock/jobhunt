@@ -53,6 +53,10 @@ services:
       - GENERATION_MODEL=${GENERATION_MODEL:-gpt-4o-mini}
       - REASONING_MODEL=${REASONING_MODEL:-o3}
       - FAST_MODEL=${FAST_MODEL:-gpt-4o-mini}
+      # Telegram push_drafts + mobile WebApp deep link
+      - HEALTH_TELEGRAM_BOT_TOKEN=${HEALTH_TELEGRAM_BOT_TOKEN:-}
+      - HEALTH_TELEGRAM_CHAT_ID=${HEALTH_TELEGRAM_CHAT_ID:-}
+      - PUBLIC_HOST=${PUBLIC_HOST:-}
     restart: unless-stopped
 
   review:
