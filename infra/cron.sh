@@ -71,11 +71,30 @@ run_health() {
         | tee -a "$LOG_DIR/health.log" || true
 }
 
+write_heartbeat() {
+    # Touch a heartbeat sidecar inside the listener's app-data volume
+    # (healthdog reads it RO) so healthdog can detect cron jobs that
+    # never fire. Runs on success OR failure of the subcommand.
+    local name="$1"
+    docker compose exec -T listener touch "/app/data/.cron.${name}.heartbeat" \
+        2>/dev/null || true
+}
+
 case "${1:-}" in
-    scrape)   run_scrape ;;
-    pipeline) run_pipeline ;;
-    health)   run_health ;;
+    scrape)
+        trap 'write_heartbeat scrape' EXIT
+        run_scrape
+        ;;
+    pipeline)
+        trap 'write_heartbeat pipeline' EXIT
+        run_pipeline
+        ;;
+    health)
+        trap 'write_heartbeat health' EXIT
+        run_health
+        ;;
     all)
+        trap 'write_heartbeat scrape; write_heartbeat pipeline; write_heartbeat health' EXIT
         run_scrape || true
         run_pipeline || true
         run_health || true

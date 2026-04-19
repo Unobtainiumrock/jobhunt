@@ -193,6 +193,8 @@ async def classify_conversation(
             return resp.choices[0].message.parsed.model_dump()
         except Exception as e:
             print(f"  ERROR classifying: {e}", file=sys.stderr)
+            from pipeline.error_log import log_error
+            log_error("classify_leads", type(e).__name__, str(e))
             return {
                 "classification": "personal",
                 "confidence": 0.0,

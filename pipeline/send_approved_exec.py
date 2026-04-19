@@ -9,15 +9,18 @@ Chrome/CDP send runs at a time.
 from __future__ import annotations
 
 import fcntl
+import json
 import os
 import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime, timezone
 
 from pipeline.config import DATA_DIR, PROJECT_ROOT
 
 SEND_SCRIPT = PROJECT_ROOT / "src" / "send-approved.mjs"
 _SEND_LOCK_PATH = DATA_DIR / ".send_approved.lock"
+_SEND_HOLDER_PATH = DATA_DIR / ".send_approved.holder"
 
 
 def env_truthy(name: str, default: bool = False) -> bool:
@@ -48,10 +51,30 @@ def sender_rate_limit_env() -> dict[str, str]:
 def _send_flock() -> Iterator[None]:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(_SEND_LOCK_PATH), os.O_RDWR | os.O_CREAT, 0o644)
+    holder_written = False
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
+        # Write a holder sidecar so healthdog can detect a wedged sender
+        # (fcntl advisory lock alone leaves no introspectable mtime). The
+        # holder lives only while the lock is held — deleted in finally.
+        try:
+            payload = {
+                "pid": os.getpid(),
+                "acquired_at": datetime.now(timezone.utc).isoformat(),
+            }
+            _SEND_HOLDER_PATH.write_text(json.dumps(payload) + "\n")
+            holder_written = True
+        except OSError:
+            pass
         yield
     finally:
+        if holder_written:
+            try:
+                _SEND_HOLDER_PATH.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
 

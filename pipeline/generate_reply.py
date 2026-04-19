@@ -619,6 +619,8 @@ async def generate_reply_body(
             result["proposed_slots"] = proposed_slots
             return result
         except Exception as e:
+            from pipeline.error_log import log_error
+            log_error("generate_reply", type(e).__name__, str(e))
             return {
                 "error": str(e),
                 "dynamic_body": "",

@@ -375,8 +375,16 @@ def poll_loop() -> None:
 
     logger.info("Telegram bot online (chat %s)", TELEGRAM_CHAT_ID)
     offset: int | None = None
+    heartbeat_path = Path("/app/data/.telegram_bot.heartbeat")
 
     while True:
+        # Touched every iteration (pre-getUpdates) so healthdog can detect a
+        # silently-wedged poll loop even when nobody is sending commands.
+        try:
+            heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+            heartbeat_path.touch()
+        except OSError:
+            pass
         params: dict[str, Any] = {"timeout": POLL_TIMEOUT_S}
         if offset is not None:
             params["offset"] = offset

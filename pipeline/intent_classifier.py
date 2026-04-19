@@ -186,6 +186,8 @@ async def _classify_one(
                 "model": model,
             }
         except Exception as exc:  # pragma: no cover - network/LLM edge
+            from pipeline.error_log import log_error
+            log_error("intent_classifier", type(exc).__name__, str(exc))
             return {
                 "tag": "unclassified",
                 "confidence": 0.0,
