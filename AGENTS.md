@@ -59,6 +59,37 @@ reload caddy`. Basic auth hash: `caddy hash-password --plaintext <pw>`.
 Bot / WebApp registration: BotFather → `/mybots` → `Bot Settings` →
 `Menu Button` → paste `https://m.<host>/m/`.
 
+## External reachability ping (laptop side)
+
+Healthdog lives on the VPS and can't alert when the VPS itself is
+down. A systemd **user** timer on the laptop polls
+`https://m.<host>/m/` every 5 min and DMs via the shared Telegram
+creds on failure. Rate-limited (one DM per 30 min while down) and
+sends a "recovered" DM on the first success after a down streak.
+
+Install (from repo root):
+
+```bash
+cp infra/systemd/linkedin-leads-external-ping.service \
+   infra/systemd/linkedin-leads-external-ping.timer \
+   ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now linkedin-leads-external-ping.timer
+```
+
+Inspect:
+
+```bash
+systemctl --user list-timers linkedin-leads-external-ping.timer
+journalctl --user -u linkedin-leads-external-ping.service -n 20
+```
+
+State file: `$XDG_STATE_HOME/linkedin-leads/external_ping.state`
+(defaults to `~/.local/state/linkedin-leads/`). Delete to reset
+down/up tracking. Caveat: only alerts while the laptop is awake and
+online — pair with an always-on monitor (e.g. UptimeRobot free tier,
+pointed at the same URL) for 24/7 coverage.
+
 ## Files you should NOT commit (gitignored, stay local/Hetzner-only)
 
 - `.env` — secrets + runtime flags. Both the laptop copy and
