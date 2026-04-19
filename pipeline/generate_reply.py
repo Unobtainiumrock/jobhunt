@@ -776,9 +776,15 @@ def _parse_iso(value: Any) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except ValueError:
         return None
+    # Date-only strings (e.g. "2026-04-19" from LinkedIn's relative-time
+    # rendering) parse as naive datetimes; downstream compares against
+    # tz-aware cutoffs. Promote naive → UTC so comparisons don't blow up.
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _last_inbound_timestamp(convo: dict[str, Any]) -> datetime | None:
