@@ -110,6 +110,12 @@ services:
       - listener
     volumes:
       - app-data:/app/data:ro
+      # Read-only socket mount for container restart-count detection.
+      # Security note: RO on the socket file does not limit Docker API
+      # access (Docker daemon is the policy boundary); any healthdog
+      # compromise ≈ Docker API access. Accepted because healthdog has
+      # no external surface.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - CDP_URL=http://desktop:9223
       - QDRANT_URL=http://qdrant:6333

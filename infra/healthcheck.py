@@ -70,6 +70,17 @@ REVIEW_HEALTH_URL = os.getenv(
 ).strip()
 BOT_HEARTBEAT_STALE_SEC = int(os.getenv("HEALTH_BOT_HEARTBEAT_STALE_SEC", "120"))
 SENDER_LOCK_STALE_SEC = int(os.getenv("HEALTH_SENDER_LOCK_STALE_SEC", "600"))
+DOCKER_RESTART_LOOP_THRESHOLD = int(os.getenv("HEALTH_RESTART_DELTA_THRESHOLD", "2"))
+DOCKER_SOCKET_PATH = os.getenv("HEALTH_DOCKER_SOCKET", "/var/run/docker.sock")
+# Services we track for restart loops. Anything not in this list is ignored.
+DOCKER_WATCH_SERVICES: list[str] = [
+    "desktop",
+    "listener",
+    "review",
+    "telegram_bot",
+    "qdrant",
+    "healthdog",
+]
 # Cron heartbeat thresholds: expected-interval * 1.5 so we grace one missed
 # tick. Keys map to data/.cron.<key>.heartbeat inside the app-data volume.
 CRON_HEARTBEAT_MAX_SEC: dict[str, int] = {
@@ -404,6 +415,103 @@ def check_send_errors() -> CheckResult:
 
 
 _pipeline_errors_watermark: float = time.time()
+_previous_restart_counts: dict[str, int] = {}
+
+
+def _docker_api_request(path: str, timeout: float = 3.0):
+    """Minimal stdlib-only Docker API call over the Unix socket.
+
+    Returns parsed JSON, or raises. No external deps (no docker-py, no
+    requests). We only need two read endpoints so this is simpler than
+    installing a client library.
+    """
+    import http.client
+    import socket as _socket
+
+    class _UnixConn(http.client.HTTPConnection):
+        def __init__(self, sock_path: str) -> None:
+            super().__init__("localhost", timeout=timeout)
+            self._sock_path = sock_path
+
+        def connect(self) -> None:
+            s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            s.connect(self._sock_path)
+            self.sock = s
+
+    conn = _UnixConn(DOCKER_SOCKET_PATH)
+    try:
+        conn.request("GET", path)
+        resp = conn.getresponse()
+        body = resp.read().decode()
+        if resp.status != 200:
+            raise RuntimeError(f"docker API {path} → {resp.status}: {body[:120]}")
+        return json.loads(body)
+    finally:
+        conn.close()
+
+
+def check_container_restarts() -> CheckResult:
+    """Detect crash loops by watching docker's RestartCount per service.
+
+    Compose sets restart:unless-stopped, so a flapping container auto-
+    restarts. Without this check you'd only notice via slow symptoms.
+    We tick once per healthdog interval (default 60s); a delta >=
+    DOCKER_RESTART_LOOP_THRESHOLD since the last tick means the
+    container just bounced multiple times in one minute.
+    """
+    if not Path(DOCKER_SOCKET_PATH).exists():
+        return CheckResult(
+            "containers",
+            True,
+            "docker socket not mounted (check skipped)",
+        )
+
+    try:
+        containers = _docker_api_request("/containers/json?all=true")
+    except Exception as exc:
+        return CheckResult(
+            "containers", False, f"docker API unreachable: {type(exc).__name__}"
+        )
+
+    flapped: list[str] = []
+    current: dict[str, int] = {}
+    for c in containers:
+        labels = c.get("Labels") or {}
+        svc = labels.get("com.docker.compose.service")
+        if not svc or svc not in DOCKER_WATCH_SERVICES:
+            continue
+        cid = c.get("Id", "")
+        if not cid:
+            continue
+        try:
+            details = _docker_api_request(f"/containers/{cid}/json")
+        except Exception:
+            continue
+        count = int(details.get("RestartCount") or 0)
+        current[svc] = count
+        prev = _previous_restart_counts.get(svc)
+        if prev is not None and (count - prev) >= DOCKER_RESTART_LOOP_THRESHOLD:
+            flapped.append(f"{svc}(+{count - prev})")
+
+    _previous_restart_counts.update(current)
+
+    if flapped:
+        return CheckResult(
+            "containers",
+            False,
+            f"restart loop: {', '.join(flapped)}",
+        )
+    if not current:
+        return CheckResult("containers", True, "no compose services tracked yet")
+    return CheckResult(
+        "containers",
+        True,
+        "stable (" + " ".join(f"{k}={v}" for k, v in sorted(current.items())) + ")",
+    )
+
+
+
 
 
 def check_pipeline_errors() -> CheckResult:
@@ -574,6 +682,7 @@ def run_checks() -> list[CheckResult]:
         check_sender_lock(),
         check_cron_heartbeats(),
         check_pipeline_errors(),
+        check_container_restarts(),
         check_gmail_token(),
         check_email_ingest_fresh(),
         check_send_errors(),
