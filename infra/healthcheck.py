@@ -190,16 +190,53 @@ def check_gmail_token() -> CheckResult:
     if cached and (now - float(_gmail_probe_cache.get("at") or 0.0)) < GMAIL_PROBE_INTERVAL:
         return cached  # type: ignore[return-value]
 
+    # Build credentials without the listener's load_authorized_user_credentials
+    # helper: that path writes the refreshed access token back to disk, which
+    # fails on healthdog's read-only mount (Errno 30). Healthdog's job is to
+    # observe, not to persist. So we refresh in-memory only; the listener
+    # container (which has RW) is responsible for the actual on-disk refresh.
     try:
-        from pipeline.email_gmail import build_gmail_service
-        service = build_gmail_service()
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
+        from googleapiclient.discovery import build
+        from pipeline.config import GMAIL_SCOPES
+    except Exception as exc:
+        return CheckResult(
+            "gmail_token", False, f"google-auth import failed: {exc}"
+        )
+
+    try:
+        creds = Credentials.from_authorized_user_file(
+            str(GOOGLE_TOKEN_GMAIL_FILE), GMAIL_SCOPES
+        )
+    except Exception as exc:
+        result = CheckResult(
+            "gmail_token", False, f"token file unreadable: {type(exc).__name__}"
+        )
+        _gmail_probe_cache["at"] = now
+        _gmail_probe_cache["result"] = result
+        return result
+
+    if not creds.refresh_token:
+        result = CheckResult(
+            "gmail_token", False, "no refresh_token in token file — re-auth required"
+        )
+        _gmail_probe_cache["at"] = now
+        _gmail_probe_cache["result"] = result
+        return result
+
+    try:
+        if creds.expired:
+            # In-memory refresh only (no write-back); if Google rejects the
+            # refresh_token we flag unhealthy. Successful refresh means the
+            # listener can refresh + persist on its next run.
+            creds.refresh(Request())
+        service = build("gmail", "v1", credentials=creds, cache_discovery=False)
         profile = service.users().getProfile(userId="me").execute()
         email = profile.get("emailAddress", "?")
         result = CheckResult("gmail_token", True, f"OAuth OK ({email})")
     except Exception as exc:
         msg = str(exc)
-        # google.auth.exceptions.RefreshError carries "invalid_grant" when the
-        # refresh token is revoked/expired (the weekly Testing-mode case).
         if "invalid_grant" in msg.lower() or "RefreshError" in type(exc).__name__:
             detail = "refresh token revoked — re-auth required"
         elif "HttpError" in type(exc).__name__:
