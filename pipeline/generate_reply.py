@@ -927,11 +927,31 @@ def reconcile_draft_threads(conversations: list[dict[str, Any]]) -> dict[str, in
       can detect drift on subsequent runs without mass-regenerating today.
     """
     now = datetime.now(timezone.utc).isoformat()
-    stats = {"manually_handled": 0, "thread_drift": 0, "legacy_fp_stamped": 0}
+    stats = {
+        "manually_handled": 0,
+        "thread_drift": 0,
+        "legacy_fp_stamped": 0,
+        "sent_rolled_over": 0,
+    }
     for convo in conversations:
         if convo.get("classification", {}).get("category") != "recruiter":
             continue
         reply = convo.get("reply")
+
+        # If a prior reply was already sent and the recruiter has spoken since,
+        # archive it to reply_history and clear the slot so _needs_reply sees
+        # a fresh opportunity. Without this, "sent" is a permanent dead-end
+        # and follow-up inbound messages never produce a new draft.
+        if reply and reply.get("status") == "sent":
+            msg_count = len(convo.get("messages") or [])
+            reply_count = int(reply.get("message_count_at_generation") or 0)
+            if msg_count > reply_count and not _user_was_last_sender(convo):
+                history = convo.setdefault("reply_history", [])
+                history.append({**reply, "rolled_over_at": now})
+                convo.pop("reply", None)
+                stats["sent_rolled_over"] += 1
+                continue
+
         if not reply or reply.get("status") not in ("draft", "auto_send"):
             continue
         if _user_was_last_sender(convo):
