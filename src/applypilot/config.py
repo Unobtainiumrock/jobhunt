@@ -91,14 +91,58 @@ def ensure_dirs():
         d.mkdir(parents=True, exist_ok=True)
 
 
+def profile_source() -> Path | None:
+    """Return the path the next ``load_profile()`` would read from, or None.
+
+    Resolution order matches ``load_profile()``: env override -> YAML in
+    APP_DIR -> legacy JSON. Used by CLI surfaces (``doctor``, apply precheck)
+    that need to report or gate on profile existence without loading it.
+    """
+    yaml_override = os.environ.get("JOBHUNT_PROFILE_YAML", "").strip()
+    if yaml_override:
+        p = Path(yaml_override).expanduser()
+        if p.exists():
+            return p
+    yaml_local = APP_DIR / "profile.yaml"
+    if yaml_local.exists():
+        return yaml_local
+    if PROFILE_PATH.exists():
+        return PROFILE_PATH
+    return None
+
+
 def load_profile() -> dict:
-    """Load user profile from ~/.applypilot/profile.json."""
+    """Load user profile in the legacy dict shape.
+
+    Resolution order:
+      1. ``JOBHUNT_PROFILE_YAML`` env var (explicit override)
+      2. ``~/.applypilot/profile.yaml`` (symlink or copy of the unified YAML)
+      3. ``~/.applypilot/profile.json`` (legacy, pre-unification)
+
+    The first two go through ``profile_adapter.load_profile_from_yaml`` so the
+    returned shape is identical regardless of source.
+    """
     import json
-    if not PROFILE_PATH.exists():
-        raise FileNotFoundError(
-            f"Profile not found at {PROFILE_PATH}. Run `applypilot init` first."
-        )
-    return json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
+
+    yaml_override = os.environ.get("JOBHUNT_PROFILE_YAML", "").strip()
+    yaml_candidates: list[Path] = []
+    if yaml_override:
+        yaml_candidates.append(Path(yaml_override).expanduser())
+    yaml_candidates.append(APP_DIR / "profile.yaml")
+
+    for path in yaml_candidates:
+        if path.exists():
+            from applypilot.profile_adapter import load_profile_from_yaml
+            return load_profile_from_yaml(path)
+
+    if PROFILE_PATH.exists():
+        return json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
+
+    raise FileNotFoundError(
+        f"Profile not found. Looked for YAML at "
+        f"{', '.join(str(p) for p in yaml_candidates)} and JSON at {PROFILE_PATH}. "
+        f"Run `applypilot init` or set JOBHUNT_PROFILE_YAML."
+    )
 
 
 def load_search_config() -> dict:

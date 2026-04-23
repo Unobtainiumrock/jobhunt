@@ -166,7 +166,7 @@ def apply(
     """Launch auto-apply to submit job applications."""
     _bootstrap()
 
-    from applypilot.config import check_tier, PROFILE_PATH as _profile_path
+    from applypilot.config import check_tier, PROFILE_PATH as _profile_path, profile_source
     from applypilot.database import get_connection
 
     # --- Utility modes (no Chrome/Claude needed) ---
@@ -194,11 +194,11 @@ def apply(
     # Check 1: Tier 3 required (Claude Code CLI + Chrome)
     check_tier(3, "auto-apply")
 
-    # Check 2: Profile exists
-    if not _profile_path.exists():
+    # Check 2: Profile exists (YAML or legacy JSON)
+    if profile_source() is None:
         console.print(
             "[red]Profile not found.[/red]\n"
-            "Run [bold]applypilot init[/bold] to create your profile first."
+            "Run [bold]applypilot init[/bold] or set JOBHUNT_PROFILE_YAML."
         )
         raise typer.Exit(code=1)
 
@@ -343,7 +343,7 @@ def doctor() -> None:
     import shutil
     from applypilot.config import (
         load_env, PROFILE_PATH, RESUME_PATH, RESUME_PDF_PATH,
-        SEARCH_CONFIG_PATH, ENV_PATH, get_chrome_path,
+        SEARCH_CONFIG_PATH, ENV_PATH, get_chrome_path, profile_source,
     )
 
     load_env()
@@ -355,11 +355,13 @@ def doctor() -> None:
     results: list[tuple[str, str, str]] = []  # (check, status, note)
 
     # --- Tier 1 checks ---
-    # Profile
-    if PROFILE_PATH.exists():
-        results.append(("profile.json", ok_mark, str(PROFILE_PATH)))
+    # Profile (YAML via unified user_profile.yaml, or legacy JSON)
+    src = profile_source()
+    if src is not None:
+        label = "profile.yaml" if src.suffix == ".yaml" else "profile.json"
+        results.append((label, ok_mark, str(src)))
     else:
-        results.append(("profile.json", fail_mark, "Run 'applypilot init' to create"))
+        results.append(("profile", fail_mark, "Run 'applypilot init' or set JOBHUNT_PROFILE_YAML"))
 
     # Resume
     if RESUME_PATH.exists():
