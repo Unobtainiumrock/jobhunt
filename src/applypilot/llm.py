@@ -3,7 +3,7 @@ Unified LLM client for ApplyPilot.
 
 Auto-detects provider from environment:
   ANTHROPIC_API_KEY -> Anthropic Claude (default: claude-sonnet-4-6)
-  GEMINI_API_KEY    -> Google Gemini (default: gemini-2.0-flash)
+  GEMINI_API_KEY    -> Google Gemini (default: gemini-2.5-flash)
   OPENAI_API_KEY    -> OpenAI (default: gpt-4o-mini)
   LLM_URL           -> Local llama.cpp / Ollama compatible endpoint
 
@@ -61,7 +61,7 @@ def _detect_provider() -> tuple[str, str, str]:
     if gemini_key and not local_url:
         return (
             _GEMINI_COMPAT_BASE,
-            model_override or "gemini-2.0-flash",
+            model_override or "gemini-2.5-flash",
             gemini_key,
         )
 
@@ -293,10 +293,13 @@ class LLMClient:
             headers=headers,
         )
 
-        # 403 on Gemini compat = model not available on compat layer.
-        # Raise a specific sentinel so chat() can switch to native API.
-        if resp.status_code == 403 and self._is_gemini:
-            raise _GeminiCompatForbidden(resp)
+        # 403 or 404 on Gemini compat = model not exposed on compat layer
+        # (preview/experimental models are often compat-forbidden with 403;
+        # deprecated models are removed with 404). Raise a sentinel so chat()
+        # can retry via the native generateContent API, which exposes a
+        # wider set of models.
+        if resp.status_code in (403, 404) and self._is_gemini:
+            raise _GeminiCompatUnavailable(resp)
 
         return self._handle_compat_response(resp)
 
@@ -333,13 +336,15 @@ class LLMClient:
 
                 return self._chat_compat(messages, temperature, max_tokens)
 
-            except _GeminiCompatForbidden as exc:
-                # Model not available on OpenAI-compat layer — switch to native.
+            except _GeminiCompatUnavailable as exc:
+                # Model not on OpenAI-compat layer — switch to native API.
+                compat_status = exc.response.status_code
                 log.warning(
-                    "Gemini compat endpoint returned 403 for model '%s'. "
+                    "Gemini compat endpoint returned %s for model '%s'. "
                     "Switching to native generateContent API. "
-                    "(Preview/experimental models are often compat-only on native.)",
-                    self.model,
+                    "(403 = preview/experimental-only on compat; "
+                    "404 = model deprecated or removed from compat.)",
+                    compat_status, self.model,
                 )
                 self._use_native_gemini = True
                 # Retry immediately with native — don't count as a rate-limit wait
@@ -347,9 +352,11 @@ class LLMClient:
                     return self._chat_native_gemini(messages, temperature, max_tokens)
                 except httpx.HTTPStatusError as native_exc:
                     raise RuntimeError(
-                        f"Both Gemini endpoints failed. Compat: 403 Forbidden. "
+                        f"Both Gemini endpoints failed. Compat: {compat_status}. "
                         f"Native: {native_exc.response.status_code} — "
-                        f"{native_exc.response.text[:200]}"
+                        f"{native_exc.response.text[:200]}. "
+                        f"Model '{self.model}' may be retired; try "
+                        f"LLM_MODEL=gemini-2.5-flash in ~/.applypilot/.env."
                     ) from native_exc
 
             except httpx.HTTPStatusError as exc:
@@ -399,11 +406,17 @@ class LLMClient:
         self._client.close()
 
 
-class _GeminiCompatForbidden(Exception):
-    """Sentinel: Gemini OpenAI-compat returned 403. Switch to native API."""
+class _GeminiCompatUnavailable(Exception):
+    """Sentinel: Gemini OpenAI-compat returned 403 or 404. Switch to native API.
+
+    403 = model exists but is preview/experimental-only on native.
+    404 = model is deprecated or removed from compat entirely.
+    """
     def __init__(self, response: httpx.Response) -> None:
         self.response = response
-        super().__init__(f"Gemini compat 403: {response.text[:200]}")
+        super().__init__(
+            f"Gemini compat {response.status_code}: {response.text[:200]}"
+        )
 
 
 # ---------------------------------------------------------------------------
