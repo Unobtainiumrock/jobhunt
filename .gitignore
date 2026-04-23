@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Editable install metadata
+_editable_impl_*.py
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
