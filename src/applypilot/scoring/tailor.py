@@ -55,7 +55,9 @@ def _build_tailor_prompt(profile: dict) -> str:
     # Preserved entities
     companies = resume_facts.get("preserved_companies", [])
     projects = resume_facts.get("preserved_projects", [])
-    school = resume_facts.get("preserved_school", "")
+    _preserved = resume_facts.get("preserved_school", "")
+    _schools = [_preserved] if isinstance(_preserved, str) else list(_preserved or [])
+    school = ", ".join(s for s in _schools if s)
     real_metrics = resume_facts.get("real_metrics", [])
 
     companies_str = ", ".join(companies) if companies else "N/A"

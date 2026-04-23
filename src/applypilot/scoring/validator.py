@@ -154,12 +154,15 @@ def validate_json_fields(data: dict, profile: dict, mode: str = "normal") -> dic
             for b in entry.get("bullets", []):
                 all_text_parts.append(b)
 
-    # Education: preserved school must be present (always enforced)
-    preserved_school = resume_facts.get("preserved_school", "")
-    if preserved_school:
-        edu = str(data.get("education", ""))
-        if preserved_school.lower() not in edu.lower():
-            errors.append(f"Education '{preserved_school}' missing")
+    # Education: preserved school(s) must be present. Accepts str or list[str]
+    # for back-compat.
+    preserved = resume_facts.get("preserved_school", "")
+    schools = [preserved] if isinstance(preserved, str) else list(preserved or [])
+    if schools:
+        edu = str(data.get("education", "")).lower()
+        for s in schools:
+            if s and s.lower() not in edu:
+                errors.append(f"Education '{s}' missing")
 
     # Bulk text checks
     all_text = " ".join(all_text_parts).lower()
@@ -229,10 +232,12 @@ def validate_tailored_resume(text: str, profile: dict, original_text: str = "") 
         if project.lower() not in text_lower:
             warnings.append(f"Project '{project}' not found -- may have been renamed")
 
-    # 5. Check school preserved
-    preserved_school = resume_facts.get("preserved_school", "")
-    if preserved_school and preserved_school.lower() not in text_lower:
-        errors.append(f"Education '{preserved_school}' missing")
+    # 5. Check school(s) preserved (accepts str or list[str] for back-compat)
+    preserved = resume_facts.get("preserved_school", "")
+    schools = [preserved] if isinstance(preserved, str) else list(preserved or [])
+    for s in schools:
+        if s and s.lower() not in text_lower:
+            errors.append(f"Education '{s}' missing")
 
     # 6. Check contact info preserved (warn, don't error -- we can inject)
     email = personal.get("email", "")
