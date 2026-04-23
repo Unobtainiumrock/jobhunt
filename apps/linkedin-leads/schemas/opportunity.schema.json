@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://linkedin-leads.local/schemas/opportunity.schema.json",
+  "title": "Opportunity",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "company",
+    "role_title",
+    "status",
+    "source",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "company": { "type": "string" },
+    "role_title": { "type": "string" },
+    "source": {
+      "type": "string",
+      "enum": ["linkedin", "company_site", "job_board", "referral", "manual", "other"]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "discovered",
+        "contacted",
+        "applied",
+        "screening",
+        "interviewing",
+        "offer",
+        "rejected",
+        "withdrawn",
+        "archived"
+      ]
+    },
+    "location": { "type": ["string", "null"] },
+    "compensation_hints": { "type": ["string", "null"] },
+    "industry": { "type": ["string", "null"] },
+    "fit_score": { "type": ["number", "null"], "minimum": 0, "maximum": 100 },
+    "priority_score": { "type": ["number", "null"] },
+    "lead_ids": { "type": "array", "items": { "type": "string" } },
+    "conversation_ids": { "type": "array", "items": { "type": "string" } },
+    "application_ids": { "type": "array", "items": { "type": "string" } },
+    "interview_loop_id": { "type": ["string", "null"] },
+    "prep_artifact_ids": { "type": "array", "items": { "type": "string" } },
+    "signal_ids": { "type": "array", "items": { "type": "string" } },
+    "job_url": { "type": ["string", "null"], "format": "uri-reference" },
+    "description_summary": { "type": ["string", "null"] },
+    "next_action": { "type": ["string", "null"] },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  }
+}

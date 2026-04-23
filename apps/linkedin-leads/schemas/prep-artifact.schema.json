@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://linkedin-leads.local/schemas/prep-artifact.schema.json",
+  "title": "PrepArtifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "kind",
+    "title",
+    "status",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "company_dossier",
+        "systems_design_topic",
+        "flashcard_set",
+        "behavioral_story",
+        "resume_variant",
+        "interview_debrief",
+        "study_note",
+        "other"
+      ]
+    },
+    "title": { "type": "string" },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "active", "reviewed", "archived"]
+    },
+    "company": { "type": ["string", "null"] },
+    "opportunity_id": { "type": ["string", "null"] },
+    "topic_tags": { "type": "array", "items": { "type": "string" } },
+    "source_paths": { "type": "array", "items": { "type": "string" } },
+    "summary": { "type": ["string", "null"] },
+    "content_path": { "type": ["string", "null"] },
+    "structured_data": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "company_context": { "type": "array", "items": { "type": "string" } },
+        "operating_thesis": { "type": "array", "items": { "type": "string" } },
+        "interview_angles": { "type": "array", "items": { "type": "string" } },
+        "tailored_value_props": { "type": "array", "items": { "type": "string" } },
+        "interview_stage_tags": { "type": "array", "items": { "type": "string" } },
+        "prep_tags": { "type": "array", "items": { "type": "string" } },
+        "follow_on_actions": { "type": "array", "items": { "type": "string" } },
+        "risks_and_open_questions": { "type": "array", "items": { "type": "string" } },
+        "source_citations": { "type": "array", "items": { "type": "string" } },
+        "primary_topics": { "type": "array", "items": { "type": "string" } },
+        "study_goals": { "type": "array", "items": { "type": "string" } },
+        "flashcard_candidates": { "type": "array", "items": { "type": "string" } },
+        "suggested_stage_tags": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "related_signal_ids": { "type": "array", "items": { "type": "string" } },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  }
+}

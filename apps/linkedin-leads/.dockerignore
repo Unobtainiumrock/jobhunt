@@ -1,0 +1,11 @@
+.env
+.git
+node_modules
+__pycache__
+*.pyc
+data/google_credentials.json
+data/google_token.json
+data/google_token_gmail.json
+profile/repo_analysis.json
+*.md
+.dockerignore

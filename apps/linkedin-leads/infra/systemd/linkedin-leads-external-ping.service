@@ -1,0 +1,10 @@
+[Unit]
+Description=linkedin-leads external reachability ping (Hetzner VPS up-check)
+Documentation=https://github.com/Unobtainiumrock/linkedin-leads
+
+[Service]
+Type=oneshot
+# Adjust this path to wherever the repo is cloned on your laptop.
+ExecStart=/home/unobtainium/Desktop/github/linkedin-leads/infra/external_ping.sh
+# Don't hammer on failure — timer handles cadence.
+Nice=10

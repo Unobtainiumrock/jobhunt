@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://linkedin-leads.local/schemas/application.schema.json",
+  "title": "Application",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "opportunity_id",
+    "source",
+    "status",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "opportunity_id": { "type": "string" },
+    "source": {
+      "type": "string",
+      "enum": ["linkedin_easy_apply", "company_site", "job_board", "referral", "manual", "other"]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "planned",
+        "drafting",
+        "submitted",
+        "screening",
+        "interviewing",
+        "rejected",
+        "withdrawn",
+        "offer"
+      ]
+    },
+    "resume_variant": { "type": ["string", "null"] },
+    "cover_letter_variant": { "type": ["string", "null"] },
+    "submitted_at": { "type": ["string", "null"], "format": "date-time" },
+    "deadline_at": { "type": ["string", "null"], "format": "date-time" },
+    "application_url": { "type": ["string", "null"], "format": "uri-reference" },
+    "notes": { "type": ["string", "null"] },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  }
+}

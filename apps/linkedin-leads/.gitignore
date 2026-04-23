@@ -1,0 +1,51 @@
+# --- Secrets & credentials ---
+.env
+.env.local
+.env.*.local
+data/google_credentials.json
+data/google_token.json
+
+# --- Personal / runtime data (lives in the `app-data` Docker volume on Hetzner) ---
+data/*
+!data/.gitkeep
+!data/README.md
+!data/entities/
+data/entities/*
+!data/entities/README.md
+!data/knowledge/
+data/knowledge/*
+!data/knowledge/README.md
+
+# --- Personal artifacts ---
+Nicholas_Fleischhauer*.pdf
+Nicholas_Fleischhauer*.docx
+ACCESS.local.md
+
+# --- Build & cache ---
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# --- Chrome / browser session ---
+profile/
+chrome-profile/
+*.session
+
+# --- Editor / OS ---
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+
+# --- Logs ---
+*.log
+logs/

@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Draft Review</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #0b1220);
+    --surface: var(--tg-theme-secondary-bg-color, #121a2b);
+    --text: var(--tg-theme-text-color, #e8eefc);
+    --muted: var(--tg-theme-hint-color, #9aa8c7);
+    --accent: var(--tg-theme-button-color, #5eead4);
+    --accent-text: var(--tg-theme-button-text-color, #06281f);
+    --green: #4ade80;
+    --red: #fb7185;
+    --yellow: #fbbf24;
+    --border: rgba(255, 255, 255, 0.08);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overscroll-behavior: none;
+    overscroll-behavior-x: none;
+    touch-action: none;
+  }
+  .thread-tail, .draft, .editor textarea {
+    touch-action: pan-y;
+  }
+  body { display: flex; flex-direction: column; }
+  header {
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  header h1 { font-size: 16px; font-weight: 600; }
+  header .count { font-size: 13px; color: var(--muted); }
+  .stack {
+    flex: 1;
+    position: relative;
+    padding: 16px;
+    overflow: hidden;
+  }
+  .card {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    right: 16px;
+    bottom: 80px;
+    background: var(--surface);
+    border-radius: 18px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    transition: transform 0.3s ease, opacity 0.3s ease;
+    will-change: transform;
+  }
+  .card.stacked-1 { transform: scale(0.96) translateY(8px); opacity: 0.6; }
+  .card.stacked-2 { transform: scale(0.92) translateY(16px); opacity: 0.3; }
+  .card.gone-right { transform: translateX(120%) rotate(12deg); opacity: 0; }
+  .card.gone-left { transform: translateX(-120%) rotate(-12deg); opacity: 0; }
+  .card.gone-up { transform: translateY(-120%); opacity: 0; }
+  .card.dragging { transition: none; }
+  .card h2 {
+    font-size: 18px;
+    font-weight: 600;
+  }
+  .card .sub {
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .card .pill {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(94, 234, 212, 0.15);
+    color: var(--accent);
+    margin-right: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .card .thread-tail {
+    font-size: 13px;
+    color: var(--muted);
+    max-height: 120px;
+    overflow-y: auto;
+    padding: 8px;
+    background: rgba(0, 0, 0, 0.15);
+    border-radius: 8px;
+    border-left: 2px solid var(--border);
+  }
+  .card .thread-tail .msg { margin-bottom: 6px; }
+  .card .thread-tail .msg:last-child { margin-bottom: 0; }
+  .card .thread-tail b { color: var(--text); }
+  .card .draft {
+    flex: 1;
+    font-size: 15px;
+    line-height: 1.4;
+    overflow-y: auto;
+    padding: 12px 8px;
+    white-space: pre-wrap;
+    user-select: none;
+  }
+  .card .hint {
+    font-size: 12px;
+    color: var(--muted);
+    text-align: center;
+    opacity: 0.6;
+  }
+  .card .swipe-indicator {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 48px;
+    font-weight: 800;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.1s;
+  }
+  .card .swipe-indicator.left { left: 24px; color: var(--red); }
+  .card .swipe-indicator.right { right: 24px; color: var(--green); }
+  .actions {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 16px;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 12px;
+    justify-content: space-around;
+  }
+  .actions button {
+    flex: 1;
+    padding: 14px;
+    border-radius: 12px;
+    border: none;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .actions .reject { background: rgba(251, 113, 133, 0.15); color: var(--red); }
+  .actions .edit { background: rgba(251, 191, 36, 0.15); color: var(--yellow); }
+  .actions .skip { background: rgba(154, 168, 199, 0.15); color: var(--muted); }
+  .actions .approve { background: rgba(74, 222, 128, 0.15); color: var(--green); }
+  .empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+    text-align: center;
+    gap: 16px;
+  }
+  .empty .big { font-size: 48px; }
+  .empty h2 { font-size: 20px; font-weight: 600; }
+  .empty p { color: var(--muted); font-size: 14px; }
+  .empty button {
+    padding: 12px 24px;
+    border-radius: 12px;
+    border: none;
+    background: var(--accent);
+    color: var(--accent-text);
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .editor {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    background: var(--bg);
+    display: none;
+    flex-direction: column;
+    padding: 16px;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+    padding-top: calc(16px + env(safe-area-inset-top));
+  }
+  .editor.open { display: flex; }
+  .editor header { background: transparent; border-bottom: none; padding: 0 0 12px; }
+  .editor textarea {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px;
+    color: var(--text);
+    font-size: 15px;
+    line-height: 1.4;
+    font-family: inherit;
+    resize: none;
+  }
+  .editor .bar {
+    display: flex;
+    gap: 12px;
+    margin-top: 12px;
+  }
+  .editor .bar button {
+    flex: 1;
+    padding: 14px;
+    border-radius: 12px;
+    border: none;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .editor .cancel { background: rgba(154, 168, 199, 0.15); color: var(--text); }
+  .editor .save { background: var(--accent); color: var(--accent-text); }
+  .toast {
+    position: fixed;
+    top: calc(16px + env(safe-area-inset-top));
+    left: 50%;
+    transform: translateX(-50%) translateY(-120%);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 16px;
+    border-radius: 999px;
+    font-size: 13px;
+    transition: transform 0.25s ease;
+    z-index: 200;
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Draft Review</h1>
+  <span class="count" id="count">0 pending</span>
+</header>
+<div class="stack" id="stack"></div>
+<div class="actions" id="actions">
+  <button class="reject" data-action="reject">✗ Reject</button>
+  <button class="edit" data-action="edit">✎ Edit</button>
+  <button class="skip" data-action="skip">⇥ Skip</button>
+  <button class="approve" data-action="approve">✓ Approve</button>
+</div>
+<div class="empty" id="empty" style="display:none">
+  <div class="big">✅</div>
+  <h2>All caught up</h2>
+  <p>No drafts pending review.</p>
+  <button onclick="closeApp()">Close</button>
+</div>
+<div class="editor" id="editor">
+  <header>
+    <h1>Edit draft</h1>
+    <span class="count" id="edit-who"></span>
+  </header>
+  <textarea id="editor-text"></textarea>
+  <div class="bar">
+    <button class="cancel" onclick="cancelEdit()">Cancel</button>
+    <button class="save" onclick="saveEdit()">Approve edited</button>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  const tg = window.Telegram && window.Telegram.WebApp;
+  if (tg) {
+    tg.ready();
+    tg.expand();
+    // Block Telegram's swipe-down-to-close; the up-swipe on cards is ours.
+    if (typeof tg.disableVerticalSwipes === "function") {
+      tg.disableVerticalSwipes();
+    }
+  }
+  const haptic = (kind) => {
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred(kind);
+  };
+  const notification = (kind) => {
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred(kind);
+  };
+
+  const initData = (tg && tg.initData) || "";
+  const startParam = (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) || "";
+
+  const auth = (opts = {}) => {
+    const headers = Object.assign({}, opts.headers || {}, {
+      "X-Telegram-Init-Data": initData,
+      "Content-Type": "application/json",
+    });
+    return Object.assign({}, opts, { headers });
+  };
+
+  let drafts = [];
+  const stackEl = document.getElementById("stack");
+  const emptyEl = document.getElementById("empty");
+  const actionsEl = document.getElementById("actions");
+  const countEl = document.getElementById("count");
+  const toastEl = document.getElementById("toast");
+
+  const toast = (msg) => {
+    toastEl.textContent = msg;
+    toastEl.classList.add("show");
+    setTimeout(() => toastEl.classList.remove("show"), 1200);
+  };
+
+  const loadDrafts = async () => {
+    try {
+      const res = await fetch("/m/api/drafts", auth());
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      let list = await res.json();
+      if (startParam) {
+        const idx = list.findIndex((c) => (c.conversationUrn || "").endsWith(startParam));
+        if (idx > 0) {
+          const [pinned] = list.splice(idx, 1);
+          list.unshift(pinned);
+        }
+      }
+      drafts = list;
+      render();
+    } catch (err) {
+      toast("Failed to load drafts");
+      console.error(err);
+    }
+  };
+
+  const otherName = (convo) => {
+    const ps = convo.participants || [];
+    const other = ps.find((p) => p.name && p.name !== "You");
+    return (other && other.name) || "?";
+  };
+
+  const headline = (convo) => {
+    const ps = convo.participants || [];
+    const other = ps.find((p) => p.headline);
+    return (other && other.headline) || "";
+  };
+
+  const render = () => {
+    stackEl.innerHTML = "";
+    countEl.textContent = drafts.length + " pending";
+    if (drafts.length === 0) {
+      emptyEl.style.display = "flex";
+      actionsEl.style.display = "none";
+      return;
+    }
+    emptyEl.style.display = "none";
+    actionsEl.style.display = "flex";
+    drafts.slice(0, 3).reverse().forEach((convo, revIdx) => {
+      const topIdx = 2 - revIdx;
+      const card = buildCard(convo, topIdx);
+      stackEl.appendChild(card);
+    });
+  };
+
+  const buildCard = (convo, stackPos) => {
+    const card = document.createElement("div");
+    card.className = "card";
+    if (stackPos === 1) card.classList.add("stacked-1");
+    if (stackPos === 2) card.classList.add("stacked-2");
+    card.dataset.urn = convo.conversationUrn || "";
+
+    const reply = convo.reply || {};
+    const intent = convo.intent || {};
+    const tail = (convo.messages || []).slice(-3);
+
+    card.innerHTML = `
+      <div class="swipe-indicator left">✗</div>
+      <div class="swipe-indicator right">✓</div>
+      <div>
+        <h2>${escape(otherName(convo))}</h2>
+        <div class="sub">${escape(headline(convo))}</div>
+      </div>
+      <div>
+        <span class="pill">${escape(intent.tag || "unknown")}</span>
+        ${reply.tier ? `<span class="pill">${escape(reply.tier)}</span>` : ""}
+      </div>
+      <div class="thread-tail">
+        ${tail.map((m) => `<div class="msg"><b>${escape(m.sender || "?")}:</b> ${escape((m.text || "").slice(0, 240))}</div>`).join("")}
+      </div>
+      <div class="draft" data-role="draft-body">${escape(reply.text || "")}</div>
+      <div class="hint">swipe → approve, ← reject, ↑ skip, long-press to edit</div>
+    `;
+    if (stackPos === 0) bindTop(card, convo);
+    return card;
+  };
+
+  const escape = (s) => String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  const SWIPE_X = 80;
+  const SWIPE_Y = 80;
+  const LONG_PRESS_MS = 500;
+
+  const bindTop = (card, convo) => {
+    let startX = 0, startY = 0, dx = 0, dy = 0;
+    let dragging = false;
+    let longPressTimer = null;
+
+    const leftInd = card.querySelector(".swipe-indicator.left");
+    const rightInd = card.querySelector(".swipe-indicator.right");
+
+    const onStart = (e) => {
+      const pt = e.touches ? e.touches[0] : e;
+      startX = pt.clientX;
+      startY = pt.clientY;
+      dx = 0; dy = 0;
+      dragging = true;
+      card.classList.add("dragging");
+      longPressTimer = setTimeout(() => {
+        longPressTimer = null;
+        if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
+          haptic("heavy");
+          openEditor(convo);
+          dragging = false;
+          card.classList.remove("dragging");
+          card.style.transform = "";
+        }
+      }, LONG_PRESS_MS);
+    };
+
+    const onMove = (e) => {
+      if (!dragging) return;
+      const pt = e.touches ? e.touches[0] : e;
+      dx = pt.clientX - startX;
+      dy = pt.clientY - startY;
+      if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+        if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+      }
+      card.style.transform = `translate(${dx}px, ${dy}px) rotate(${dx * 0.05}deg)`;
+      leftInd.style.opacity = dx < 0 ? Math.min(1, Math.abs(dx) / SWIPE_X) : 0;
+      rightInd.style.opacity = dx > 0 ? Math.min(1, dx / SWIPE_X) : 0;
+    };
+
+    const onEnd = () => {
+      if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+      if (!dragging) return;
+      dragging = false;
+      card.classList.remove("dragging");
+      if (dx > SWIPE_X) {
+        animateOut(card, "right");
+        commit(convo, "approve");
+      } else if (dx < -SWIPE_X) {
+        animateOut(card, "left");
+        commit(convo, "reject");
+      } else if (dy < -SWIPE_Y) {
+        animateOut(card, "up");
+        skip(convo);
+      } else {
+        card.style.transform = "";
+        leftInd.style.opacity = 0;
+        rightInd.style.opacity = 0;
+      }
+    };
+
+    card.addEventListener("touchstart", onStart, { passive: true });
+    card.addEventListener("touchmove", onMove, { passive: true });
+    card.addEventListener("touchend", onEnd);
+    card.addEventListener("touchcancel", onEnd);
+    // Desktop fallback for dev.
+    card.addEventListener("mousedown", onStart);
+    card.addEventListener("mousemove", onMove);
+    card.addEventListener("mouseup", onEnd);
+    card.addEventListener("mouseleave", onEnd);
+  };
+
+  const animateOut = (card, dir) => {
+    card.classList.add("gone-" + dir);
+  };
+
+  const commit = async (convo, action, text) => {
+    const urn = convo.conversationUrn;
+    notification(action === "approve" ? "success" : "warning");
+    try {
+      await fetch("/m/api/action", auth({
+        method: "POST",
+        body: JSON.stringify({ urn, action, text: text || "" }),
+      }));
+      toast(action === "approve" ? "Approved" : "Rejected");
+    } catch (err) {
+      toast("Action failed");
+      console.error(err);
+    }
+    removeTop();
+  };
+
+  const skip = (convo) => {
+    haptic("light");
+    drafts.push(drafts.shift());
+    setTimeout(render, 300);
+  };
+
+  const removeTop = () => {
+    setTimeout(() => {
+      drafts.shift();
+      render();
+    }, 300);
+  };
+
+  document.querySelectorAll("#actions button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (drafts.length === 0) return;
+      const top = drafts[0];
+      const action = btn.dataset.action;
+      const topCard = stackEl.querySelector(".card:last-child");
+      if (action === "approve") {
+        if (topCard) animateOut(topCard, "right");
+        commit(top, "approve");
+      } else if (action === "reject") {
+        if (topCard) animateOut(topCard, "left");
+        commit(top, "reject");
+      } else if (action === "skip") {
+        if (topCard) animateOut(topCard, "up");
+        setTimeout(() => skip(top), 300);
+      } else if (action === "edit") {
+        openEditor(top);
+      }
+    });
+  });
+
+  // Editor overlay
+  let editorConvo = null;
+  const editorEl = document.getElementById("editor");
+  const editorTextEl = document.getElementById("editor-text");
+  const editWhoEl = document.getElementById("edit-who");
+
+  const openEditor = (convo) => {
+    editorConvo = convo;
+    editWhoEl.textContent = otherName(convo);
+    editorTextEl.value = ((convo.reply || {}).text) || "";
+    editorEl.classList.add("open");
+    setTimeout(() => editorTextEl.focus(), 50);
+  };
+
+  window.cancelEdit = () => {
+    editorEl.classList.remove("open");
+    editorConvo = null;
+  };
+
+  window.saveEdit = async () => {
+    if (!editorConvo) return;
+    const text = editorTextEl.value.trim();
+    if (!text) { toast("Empty draft"); return; }
+    const convo = editorConvo;
+    editorEl.classList.remove("open");
+    editorConvo = null;
+    const topCard = stackEl.querySelector(".card:last-child");
+    if (topCard) animateOut(topCard, "right");
+    await commit(convo, "approve", text);
+  };
+
+  window.closeApp = () => {
+    if (tg && tg.close) tg.close();
+  };
+
+  loadDrafts();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://linkedin-leads.local/schemas/conversation.schema.json",
+  "title": "Conversation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "source",
+    "participant_ids",
+    "status",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "source": {
+      "type": "string",
+      "enum": ["linkedin", "email", "sms", "phone", "manual", "other"]
+    },
+    "external_thread_id": { "type": ["string", "null"] },
+    "participant_ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "opportunity_id": { "type": ["string", "null"] },
+    "status": {
+      "type": "string",
+      "enum": ["new", "active", "awaiting_reply", "scheduled", "cold", "closed", "archived"]
+    },
+    "classification": {
+      "type": ["string", "null"],
+      "enum": ["recruiter", "networking", "spam", "personal", null]
+    },
+    "message_count": { "type": "integer", "minimum": 0 },
+    "last_activity_at": { "type": ["string", "null"], "format": "date-time" },
+    "summary": { "type": ["string", "null"] },
+    "messages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sender", "text"],
+        "properties": {
+          "sender": { "type": "string" },
+          "text": { "type": "string" },
+          "timestamp": { "type": ["string", "null"], "format": "date-time" },
+          "subject": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "signal_ids": { "type": "array", "items": { "type": "string" } },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  }
+}

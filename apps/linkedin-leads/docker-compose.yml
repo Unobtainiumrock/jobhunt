@@ -1,0 +1,180 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    volumes:
+      - qdrant-storage:/qdrant/storage
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  desktop:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.vnc
+    ports:
+      - "127.0.0.1:6080:6080"
+    volumes:
+      - chrome-profile:/data/chrome-profile
+    environment:
+      - VNC_PASSWORD=${VNC_PASSWORD:-linkedin}
+      - CDP_PORT=9222
+      - VNC_PORT=5901
+      - NOVNC_PORT=6080
+    restart: unless-stopped
+    shm_size: "2gb"
+
+  listener:
+    build: .
+    command: ["npm", "run", "listen:full"]
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      desktop:
+        condition: service_started
+    volumes:
+      - app-data:/app/data
+    environment:
+      - CDP_URL=http://desktop:9223
+      - QDRANT_URL=http://qdrant:6333
+      - LISTENER_HEALTH_PORT=3765
+      - LINKEDIN_SCRAPE_DAYS=${LINKEDIN_SCRAPE_DAYS:-7}
+      - GMAIL_INGEST_ENABLED=${GMAIL_INGEST_ENABLED:-0}
+      - GMAIL_QUERY=${GMAIL_QUERY:-newer_than:14d}
+      - GMAIL_MAX_MESSAGES=${GMAIL_MAX_MESSAGES:-60}
+      - GMAIL_SELF_EMAIL=${GMAIL_SELF_EMAIL:-}
+      # Skip Gmail when token not on volume (OAuth needs a browser; do that on laptop).
+      - GMAIL_HEADLESS_SKIP=${GMAIL_HEADLESS_SKIP:-1}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - CLASSIFY_MODEL=${CLASSIFY_MODEL:-gpt-4o-mini}
+      - GENERATION_MODEL=${GENERATION_MODEL:-gpt-4o-mini}
+      - REASONING_MODEL=${REASONING_MODEL:-o3}
+      - FAST_MODEL=${FAST_MODEL:-gpt-4o-mini}
+      # Telegram push_drafts + mobile WebApp deep link
+      - HEALTH_TELEGRAM_BOT_TOKEN=${HEALTH_TELEGRAM_BOT_TOKEN:-}
+      - HEALTH_TELEGRAM_CHAT_ID=${HEALTH_TELEGRAM_CHAT_ID:-}
+      - PUBLIC_HOST=${PUBLIC_HOST:-}
+    restart: unless-stopped
+
+  review:
+    build: .
+    command: ["python", "-m", "pipeline.review_server"]
+    depends_on:
+      - qdrant
+      - desktop
+    ports:
+      - "127.0.0.1:3457:3457"
+    volumes:
+      - app-data:/app/data
+      # JH-PH8 prep: expose the BAP jobhunt.db + entities read-only so the
+      # review UI can surface applications alongside recruiter replies
+      # without needing to round-trip through the pipeline container.
+      - /opt/jobhunt/data:/jobhunt:ro
+    environment:
+      - REVIEW_HOST=0.0.0.0
+      - QDRANT_URL=http://qdrant:6333
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # Send-approved.mjs (spawned by review server) drives Chrome in the
+      # `desktop` container over CDP.
+      - CDP_URL=http://desktop:9223
+      - LINKEDIN_USER_NAME=${LINKEDIN_USER_NAME:-Nicholas J. Fleischhauer}
+      # Live sends default on (unset in `.env` → 1). Set LINKEDIN_SEND_ENABLED=0 in `.env`
+      # to dry-run. When 1: Approve, Telegram /approve, and bulk send dispatch.
+      # Dry-runs for the bulk button are always allowed regardless.
+      - LINKEDIN_SEND_ENABLED=${LINKEDIN_SEND_ENABLED:-1}
+      # Soft cap on sends-per-hour. Translated into per-run delay + max envs
+      # by pipeline.send_approved_exec.sender_rate_limit_env.
+      - SENDER_RATE_LIMIT=${SENDER_RATE_LIMIT:-12}
+      - HEALTH_TELEGRAM_BOT_TOKEN=${HEALTH_TELEGRAM_BOT_TOKEN:-}
+      - HEALTH_TELEGRAM_CHAT_ID=${HEALTH_TELEGRAM_CHAT_ID:-}
+    restart: unless-stopped
+
+  telegram_bot:
+    build: .
+    command: ["python", "infra/telegram_bot.py"]
+    depends_on:
+      - review
+      - desktop
+    volumes:
+      - app-data:/app/data
+    environment:
+      - HEALTH_TELEGRAM_BOT_TOKEN=${HEALTH_TELEGRAM_BOT_TOKEN:-}
+      - HEALTH_TELEGRAM_CHAT_ID=${HEALTH_TELEGRAM_CHAT_ID:-}
+      - LINKEDIN_USER_NAME=${LINKEDIN_USER_NAME:-Nicholas J. Fleischhauer}
+      - CDP_URL=http://desktop:9223
+      - LINKEDIN_SEND_ENABLED=${LINKEDIN_SEND_ENABLED:-1}
+      - SENDER_RATE_LIMIT=${SENDER_RATE_LIMIT:-12}
+    restart: unless-stopped
+
+  healthdog:
+    build: .
+    command: ["python", "infra/healthcheck.py", "--watch"]
+    depends_on:
+      - desktop
+      - qdrant
+      - listener
+    volumes:
+      - app-data:/app/data:ro
+      # Read-only socket mount for container restart-count detection.
+      # Security note: RO on the socket file does not limit Docker API
+      # access (Docker daemon is the policy boundary); any healthdog
+      # compromise ≈ Docker API access. Accepted because healthdog has
+      # no external surface.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - CDP_URL=http://desktop:9223
+      - QDRANT_URL=http://qdrant:6333
+      - HEALTH_LISTENER_URL=http://listener:3765
+      - HEALTH_TELEGRAM_BOT_TOKEN=${HEALTH_TELEGRAM_BOT_TOKEN:-}
+      - HEALTH_TELEGRAM_CHAT_ID=${HEALTH_TELEGRAM_CHAT_ID:-}
+      - HEALTH_WEBHOOK_URL=${HEALTH_WEBHOOK_URL:-}
+      - HEALTH_CHECK_INTERVAL=${HEALTH_CHECK_INTERVAL:-60}
+      - HEALTH_ALERT_REMIND_INTERVAL=${HEALTH_ALERT_REMIND_INTERVAL:-1800}
+      - GMAIL_INGEST_ENABLED=${GMAIL_INGEST_ENABLED:-0}
+      - GMAIL_STALE_HOURS=${GMAIL_STALE_HOURS:-24}
+      - HEALTH_GMAIL_PROBE_INTERVAL=${HEALTH_GMAIL_PROBE_INTERVAL:-900}
+    restart: unless-stopped
+
+  # BAP pipeline (discover/enrich/score/tailor/cover/pdf). Sits under the
+  # `ondemand` profile so `docker compose up` doesn't bring it up — the
+  # host cron invokes it with `docker compose --profile ondemand run
+  # --rm pipeline <cmd>` which exits after each stage, releasing the ~500-
+  # 900 MB peak memory a chromium-using stage requires. The box has 3.7 GB
+  # RAM and linkedin-leads already holds 1.3 GB; we cannot afford a
+  # perpetually-resident Python container here.
+  #
+  # Source is bind-mounted (not COPYed into the image) so pulling new
+  # commits on the host surfaces immediately on the next run — no image
+  # rebuild needed for day-to-day iteration.
+  pipeline:
+    build:
+      context: /opt/BetterApplyPilot
+      dockerfile: infra/Dockerfile.pipeline
+    image: jobhunt-pipeline:latest
+    mem_limit: 1g
+    profiles: ["ondemand"]
+    volumes:
+      - /opt/BetterApplyPilot:/app
+      - /opt/jobhunt-core:/opt/jobhunt-core
+      - /opt/jobhunt/data:/data
+      - /opt/linkedin-leads/profile:/opt/linkedin-leads/profile:ro
+    environment:
+      - APPLYPILOT_DIR=/data
+      - APPLYPILOT_BACKEND=hetzner
+      - JOBHUNT_PROFILE_YAML=/opt/linkedin-leads/profile/user_profile.yaml
+      # Auto-sync is disabled server-side: this container IS the writer
+      # in Mode B. Setting JOBHUNT_REMOTE_SSH_HOST empty explicitly
+      # overrides anything leaking in from a host .env.
+      - JOBHUNT_REMOTE_SSH_HOST=
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-gemini-2.5-flash}
+
+volumes:
+  qdrant-storage:
+  chrome-profile:
+  app-data:

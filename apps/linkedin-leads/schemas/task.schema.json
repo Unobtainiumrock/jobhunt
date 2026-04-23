@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://linkedin-leads.local/schemas/task.schema.json",
+  "title": "Task",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "title",
+    "kind",
+    "status",
+    "priority",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "follow_up",
+        "application",
+        "interview_prep",
+        "study_session",
+        "profile_update",
+        "admin",
+        "other"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["not_started", "in_progress", "waiting", "blocked", "complete", "cancelled"]
+    },
+    "priority": {
+      "type": "string",
+      "enum": ["P0", "P1", "P2", "P3"]
+    },
+    "due_at": { "type": ["string", "null"], "format": "date-time" },
+    "opportunity_id": { "type": ["string", "null"] },
+    "lead_id": { "type": ["string", "null"] },
+    "interview_loop_id": { "type": ["string", "null"] },
+    "interview_stage_id": { "type": ["string", "null"] },
+    "prep_artifact_ids": { "type": "array", "items": { "type": "string" } },
+    "external_task_system": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "external_id": { "type": "string" }
+      }
+    },
+    "notes": { "type": ["string", "null"] },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  }
+}

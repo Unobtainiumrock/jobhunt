@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://linkedin-leads.local/schemas/interview-loop.schema.json",
+  "title": "InterviewLoop",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "opportunity_id",
+    "status",
+    "stages",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "opportunity_id": { "type": "string" },
+    "status": {
+      "type": "string",
+      "enum": ["planned", "active", "completed", "offer", "rejected", "withdrawn"]
+    },
+    "stages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "status"],
+        "properties": {
+          "id": { "type": "string" },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "recruiter_screen",
+              "hiring_manager",
+              "technical",
+              "system_design",
+              "behavioral",
+              "onsite",
+              "take_home",
+              "final_round",
+              "other"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["planned", "scheduled", "completed", "cancelled"]
+          },
+          "scheduled_at": { "type": ["string", "null"], "format": "date-time" },
+          "duration_minutes": { "type": ["integer", "null"], "minimum": 0 },
+          "interviewer_names": { "type": "array", "items": { "type": "string" } },
+          "prep_artifact_ids": { "type": "array", "items": { "type": "string" } },
+          "task_ids": { "type": "array", "items": { "type": "string" } },
+          "debrief": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "debrief_summary": { "type": ["string", "null"] },
+    "next_step": { "type": ["string", "null"] },
+    "task_ids": { "type": "array", "items": { "type": "string" } },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  }
+}

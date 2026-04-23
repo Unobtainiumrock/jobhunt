@@ -1,0 +1,30 @@
+# Caddy reverse proxy for linkedin-leads VPC deployment
+# Replace {$DOMAIN} with your actual domain, or set DOMAIN env var.
+#
+# Usage:
+#   DOMAIN=yourdomain.com caddy run --config infra/Caddyfile
+#
+# Caddy handles automatic HTTPS via Let's Encrypt.
+
+review.{$DOMAIN} {
+	basicauth {
+		# Generate a hash: caddy hash-password --plaintext yourpassword
+		{$BASIC_AUTH_USER:admin} {$BASIC_AUTH_HASH}
+	}
+	reverse_proxy localhost:3457
+}
+
+vnc.{$DOMAIN} {
+	basicauth {
+		{$BASIC_AUTH_USER:admin} {$BASIC_AUTH_HASH}
+	}
+	reverse_proxy localhost:6080
+}
+
+# Mobile swipe review UI (Telegram WebApp).
+# Auth is enforced *inside* the app by verifying Telegram's signed initData
+# payload (infra/telegram_auth.py); Basic auth would break the WebApp since
+# Telegram's in-app WebView cannot handle auth prompts. Do not add basicauth.
+m.{$DOMAIN} {
+	reverse_proxy localhost:3457
+}

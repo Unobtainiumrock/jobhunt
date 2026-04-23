@@ -1,0 +1,13 @@
+[Unit]
+Description=Run linkedin-leads-external-ping every 5 minutes
+Documentation=https://github.com/Unobtainiumrock/linkedin-leads
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=linkedin-leads-external-ping.service
+# Catch up if the laptop was asleep when a tick was supposed to fire.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

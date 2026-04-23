@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://linkedin-leads.local/schemas/lead.schema.json",
+  "title": "Lead",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "name",
+    "source",
+    "status",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "name": { "type": "string", "minLength": 1 },
+    "source": {
+      "type": "string",
+      "enum": ["linkedin", "email", "referral", "manual", "other"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["new", "active", "responded", "scheduled", "cold", "declined", "archived"]
+    },
+    "headline": { "type": ["string", "null"] },
+    "company": { "type": ["string", "null"] },
+    "role_title": { "type": ["string", "null"] },
+    "recruiter_type": {
+      "type": ["string", "null"],
+      "enum": ["agency", "in_house", "hiring_manager", null]
+    },
+    "profile_url": { "type": ["string", "null"], "format": "uri-reference" },
+    "profile_urn": { "type": ["string", "null"] },
+    "contact_methods": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "emails": { "type": "array", "items": { "type": "string", "format": "email" } },
+        "phones_e164": { "type": "array", "items": { "type": "string" } },
+        "calendar_links": { "type": "array", "items": { "type": "string", "format": "uri" } },
+        "websites": { "type": "array", "items": { "type": "string", "format": "uri" } }
+      }
+    },
+    "opportunity_ids": { "type": "array", "items": { "type": "string" } },
+    "signal_ids": { "type": "array", "items": { "type": "string" } },
+    "notes": { "type": ["string", "null"] },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  }
+}
