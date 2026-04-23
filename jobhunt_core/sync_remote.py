@@ -29,6 +29,8 @@ log = logging.getLogger(__name__)
 def push_checkpoint(
     db_path: str | Path | None = None,
     entities_dir: str | Path | None = None,
+    tailored_dir: str | Path | None = None,
+    cover_dir: str | Path | None = None,
     remote_host: str | None = None,
     remote_dir: str | None = None,
 ) -> dict[str, Any]:
@@ -40,6 +42,10 @@ def push_checkpoint(
             etc.). Synced into ``<remote_dir>/entities/`` (trailing-slash
             semantics; contents of ``entities_dir`` appear directly under
             remote ``entities/``, schema-mirrored).
+        tailored_dir: Local tailored-resumes dir. Synced into
+            ``<remote_dir>/tailored_resumes/``. Needed so the Phase-8
+            review UI can serve the PDFs a Mode-A laptop produced.
+        cover_dir: Local cover-letters dir. Same story as ``tailored_dir``.
         remote_host: SSH host alias or ``user@host``. Defaults to
             ``JOBHUNT_REMOTE_SSH_HOST`` env, or no-op if unset.
         remote_dir: Base directory on the remote. Defaults to
@@ -47,8 +53,9 @@ def push_checkpoint(
 
     Returns:
         A dict describing what happened. ``{"skipped": True}`` when remote
-        isn't configured. Otherwise keys ``db`` / ``entities`` each map to
-        ``"ok"`` or ``"error: <reason>"``.
+        isn't configured. Otherwise keys ``db`` / ``entities`` /
+        ``tailored`` / ``cover`` each map to ``"ok"`` or
+        ``"error: <reason>"``.
     """
     # Split-brain guard: when APPLYPILOT_BACKEND=hetzner the server IS
     # the authoritative writer and a laptop-initiated push would create
@@ -89,6 +96,20 @@ def push_checkpoint(
             )
         else:
             result["entities"] = "skipped: local path missing"
+
+    if tailored_dir:
+        td = Path(tailored_dir)
+        if td.exists():
+            result["tailored"] = _rsync(
+                f"{str(td)}/", f"{host}:{remote_base}/tailored_resumes/", timeout=60,
+            )
+
+    if cover_dir:
+        cd_ = Path(cover_dir)
+        if cd_.exists():
+            result["cover"] = _rsync(
+                f"{str(cd_)}/", f"{host}:{remote_base}/cover_letters/", timeout=60,
+            )
 
     return result
 
