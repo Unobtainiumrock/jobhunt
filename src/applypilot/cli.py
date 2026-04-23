@@ -303,6 +303,42 @@ def sync_entities(
 
 
 @app.command()
+def drainer(
+    poll_interval: int = typer.Option(60, "--poll-interval", help="Seconds between empty-queue polls."),
+    per_hour_cap: int = typer.Option(20, "--per-hour-cap", help="Max applies per rolling hour."),
+    min_score: int = typer.Option(7, "--min-score", help="Minimum fit_score to consider."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Go through the motions; skip actual Submit."),
+) -> None:
+    """Run the Mode-B apply drainer on this laptop.
+
+    Polls the Hetzner-authoritative SQLite over SSH, atomically claims the
+    highest-fit ready-to-apply row, rsyncs its resume/cover PDFs locally,
+    runs ``applypilot apply --url`` against the laptop's Chrome + Claude
+    Code CLI, and pushes the status back to the server. Blocks until
+    SIGINT / SIGTERM.
+
+    Requires:
+      - ``APPLYPILOT_BACKEND=hetzner`` recommended in the laptop ``.env``
+        (otherwise Phase-5 auto-sync will fight this drainer for writes).
+      - ``~/.claude/`` authenticated with Claude Code CLI.
+      - ``hetzner`` SSH alias configured with key-based auth.
+    """
+    _bootstrap()
+    from applypilot.drainer import DrainerConfig, run_forever
+    cfg = DrainerConfig.from_env()
+    cfg.poll_interval_sec = poll_interval
+    cfg.per_hour_cap = per_hour_cap
+    cfg.min_score = min_score
+    cfg.dry_run = dry_run
+    console.print(
+        f"[bold blue]drainer:[/bold blue] polling {cfg.remote_host}:{cfg.remote_data_dir}/jobhunt.db "
+        f"every {cfg.poll_interval_sec}s (cap {cfg.per_hour_cap}/h, min_score={cfg.min_score}"
+        f"{', dry-run' if cfg.dry_run else ''}). Ctrl+C to stop."
+    )
+    run_forever(cfg)
+
+
+@app.command()
 def status() -> None:
     """Show pipeline statistics from the database."""
     _bootstrap()

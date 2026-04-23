@@ -60,9 +60,62 @@ the host's standard logrotate.
 
 The `apply` stage **does not** run in the pipeline container. Claude
 Code CLI + ATS-form Chrome would blow the RAM budget on the 3.7 GB
-Hetzner VM. Apply-side execution stays on the laptop; a drainer
-(JH-PH7) polls the server DB for `apply_status='queued'` rows, runs
-apply locally, and writes status back.
+Hetzner VM. Apply-side execution stays on the laptop; the drainer
+(see below) polls the server DB for ready-to-apply rows, runs apply
+locally, and writes status back.
+
+## Apply drainer (laptop-side Mode B companion)
+
+Run it in the foreground:
+
+```
+applypilot drainer --poll-interval 60 --per-hour-cap 20 --min-score 7
+```
+
+Or as a systemd user unit that auto-starts on login:
+
+```ini
+# ~/.config/systemd/user/applypilot-drainer.service
+[Unit]
+Description=ApplyPilot Mode-B apply drainer
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=APPLYPILOT_BACKEND=hetzner
+ExecStart=%h/.pyenv/shims/applypilot drainer --poll-interval 60 --per-hour-cap 20
+Restart=on-failure
+RestartSec=30s
+
+[Install]
+WantedBy=default.target
+```
+
+Then:
+
+```
+systemctl --user daemon-reload
+systemctl --user enable --now applypilot-drainer.service
+journalctl --user -u applypilot-drainer.service -f
+```
+
+What the drainer does each poll tick (happy path):
+
+1. `ssh hetzner "sqlite3 /opt/jobhunt/data/jobhunt.db ..."` — atomic
+   `UPDATE ... RETURNING` sets the highest-fit ready-to-apply row to
+   `apply_status='in_progress', agent_id='drainer-<hostname>'` and
+   hands it back. No claim contention: the transaction is SQLite-side.
+2. rsync the claimed row's tailored-resume + cover-letter PDFs from
+   `/opt/jobhunt/data/tailored_resumes/` / `.../cover_letters/` into a
+   laptop-local temp dir.
+3. Subprocess: `applypilot apply --url <url> --limit 1`. This runs the
+   existing apply code against the laptop's Chrome + Claude Code CLI,
+   writing its status to `~/.applypilot/applypilot.db` as usual.
+4. Read the status from the laptop DB, SSH a second UPDATE to set the
+   same status on the server row. Clear `agent_id`.
+
+On SIGINT / SIGTERM mid-apply, the drainer releases any unfinished
+claim (`apply_status → NULL`) so the next run can retry.
 
 ## Rollback
 
