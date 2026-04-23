@@ -1,0 +1,53 @@
+# BAP pipeline container — runs discover/enrich/score/tailor/cover/pdf stages
+# on the Hetzner server. Apply stage stays on the laptop (needs Claude Code
+# CLI + ATS-form Chrome); that's handled by the laptop drainer (JH-PH7).
+#
+# Target box: 3.7 GB RAM total. This image + chromium peak must stay under
+# the container mem_limit (1 GB). Strategy:
+#   - python:3.12-slim base (~95 MB layer)
+#   - install chromium once at build, reuse at runtime
+#   - one-shot execution via `docker compose run --rm pipeline <cmd>` so
+#     no idle RAM is consumed between cron ticks
+#   - BAP source + jobhunt_core are bind-mounted (not COPYed) so the image
+#     stays small and updates propagate without rebuild
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
+
+# Chromium's runtime shared libs + a few utilities the pipeline expects
+# (sqlite3 CLI for ad-hoc introspection, git so editable installs can
+# resolve their pyproject source metadata, fonts for PDF rendering).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+        libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+        libgbm1 libxext6 libxcb1 libasound2 libpango-1.0-0 libcairo2 \
+        libatspi2.0-0 \
+        sqlite3 git curl fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python deps. Pinned approximately to what BAP pulls via pyproject.toml
+# plus the handful python-jobspy needs. Anything that isn't pinned here
+# is picked up transitively when pip install -e runs at container start.
+RUN pip install \
+        pydantic>=2.0 pyyaml>=6.0 jsonschema>=4.0 httpx>=0.24 \
+        "rich>=13.0" "typer>=0.9" python-dotenv>=1.0 \
+        beautifulsoup4>=4.12 pandas>=2.0 numpy>=1.26 \
+        python-jobspy tls-client markdownify regex \
+        playwright \
+    && python -m playwright install chromium
+
+WORKDIR /app
+
+# Everything the pipeline needs is bind-mounted at runtime:
+#   /opt/BetterApplyPilot  -> /app
+#   /opt/jobhunt-core      -> /opt/jobhunt-core
+#   /opt/jobhunt/data      -> /data  (the authoritative SQLite + entities)
+# Entrypoint wires these via pip install -e each, then execs the command.
+COPY infra/pipeline-entrypoint.sh /usr/local/bin/pipeline-entrypoint
+RUN chmod +x /usr/local/bin/pipeline-entrypoint
+
+ENTRYPOINT ["/usr/local/bin/pipeline-entrypoint"]
+CMD ["applypilot", "--help"]
