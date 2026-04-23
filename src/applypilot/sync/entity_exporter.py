@@ -27,7 +27,10 @@ from typing import Any, Iterable
 
 log = logging.getLogger(__name__)
 
-# --- Schema enums (kept in sync with linkedin-leads/schemas/opportunity.schema.json) ---
+# Schema enums live in jobhunt_core.entities. The sets below are used only
+# for the defensive coercion path (unexpected BAP state -> fallback enum).
+# They stay hard-coded here to avoid a heavier pydantic import just for
+# membership checks.
 
 _STATUS_ENUM = {
     "discovered", "contacted", "applied", "screening",
@@ -178,92 +181,37 @@ def build_opportunity(job: dict[str, Any]) -> dict[str, Any]:
 
 # --- Writers ---
 
-# Status lifecycle rank. On merge, the later-stage status wins so a linkedin-
-# leads record already in 'interviewing' isn't downgraded by BAP seeing the
-# same role listing and writing 'discovered'. Terminal states (rejected,
-# withdrawn, archived) are not downgraded either — they represent explicit
-# user/system decisions.
-_STATUS_RANK = {
-    "discovered": 0,
-    "contacted": 1,
-    "applied": 2,
-    "screening": 3,
-    "interviewing": 4,
-    "offer": 5,
-    "rejected": 9,
-    "withdrawn": 9,
-    "archived": 9,
-}
-
-# Fields that linkedin-leads populates (cross-links, narrative next-action,
-# richer metadata). BAP should never overwrite these on re-export.
-_LINKEDIN_OWNED_FIELDS = (
-    "lead_ids", "conversation_ids", "application_ids", "interview_loop_id",
-    "prep_artifact_ids", "signal_ids", "next_action", "industry",
-    "priority_score",
-)
-
-
-def _merge_records(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
-    """Merge an incoming BAP-built record with a pre-existing JSON on disk.
-
-    - linkedin-leads-owned cross-link / narrative fields: kept from existing.
-    - Status: later-lifecycle wins; terminal states are sticky.
-    - created_at: earliest preserved (first-seen timestamp).
-    - All other BAP-owned fields (company, role, source, location, fit_score,
-      etc.): refreshed from the incoming BAP snapshot.
-    """
-    merged = dict(incoming)
-    for field in _LINKEDIN_OWNED_FIELDS:
-        if existing.get(field) not in (None, [], ""):
-            merged[field] = existing[field]
-    # Status: keep the higher rank
-    old_rank = _STATUS_RANK.get(existing.get("status", ""), -1)
-    new_rank = _STATUS_RANK.get(incoming.get("status", ""), -1)
-    if old_rank > new_rank:
-        merged["status"] = existing["status"]
-    # Created_at: preserve the earlier (first-seen) timestamp
-    if existing.get("created_at") and (
-        not incoming.get("created_at") or existing["created_at"] < incoming["created_at"]
-    ):
-        merged["created_at"] = existing["created_at"]
-    return merged
-
-
 def export_opportunity(job: dict[str, Any], target_dir: Path | None = None) -> Path:
     """Write a single Opportunity JSON file. Returns the file path.
 
-    Idempotent and merge-safe: if a JSON already exists at the target stable
-    ID, linkedin-leads-populated cross-link fields are preserved and status
-    is never downgraded (see ``_merge_records``).
+    Delegates pydantic validation, merge-with-existing, and file I/O to
+    ``jobhunt_core.store.write_opportunity``. The jobhunt_core layer
+    enforces the schema (``additionalProperties: false`` via pydantic
+    ``extra='forbid'``), handles status-downgrade protection, and
+    preserves linkedin-leads-populated cross-link fields.
     """
-    base = (target_dir or entities_dir()) / "opportunities"
-    base.mkdir(parents=True, exist_ok=True)
+    from jobhunt_core.store import write_opportunity
 
     record = build_opportunity(job)
 
-    # Defensive enum validation — catch drift between BAP and schema early.
+    # Defensive enum coercion — catch drift between BAP and schema early.
+    # Strictly speaking jobhunt_core will raise ValidationError on bad enums,
+    # but a warn-and-coerce keeps pipeline stages forward-compatible when a
+    # new apply_status value appears that we haven't mapped yet.
     if record["status"] not in _STATUS_ENUM:
-        log.warning("Opportunity status %r not in schema enum; coercing to 'discovered'", record["status"])
+        log.warning(
+            "Opportunity status %r not in schema enum; coercing to 'discovered'",
+            record["status"],
+        )
         record["status"] = "discovered"
     if record["source"] not in _SOURCE_ENUM:
-        log.warning("Opportunity source %r not in schema enum; coercing to 'other'", record["source"])
+        log.warning(
+            "Opportunity source %r not in schema enum; coercing to 'other'",
+            record["source"],
+        )
         record["source"] = "other"
 
-    path = base / f"{record['id']}.json"
-    if path.exists():
-        try:
-            existing = json.loads(path.read_text(encoding="utf-8"))
-            record = _merge_records(existing, record)
-        except (OSError, ValueError) as exc:
-            # Corrupt or unreadable existing — overwrite with fresh record rather
-            # than drop the new data. Log for visibility.
-            log.warning("Could not merge existing %s (%s); overwriting", path.name, exc)
-
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(record, f, indent=2, sort_keys=True)
-        f.write("\n")
-    return path
+    return write_opportunity(record, target_dir or entities_dir())
 
 
 def export_all_opportunities(jobs: Iterable[dict[str, Any]], target_dir: Path | None = None) -> dict[str, int]:
