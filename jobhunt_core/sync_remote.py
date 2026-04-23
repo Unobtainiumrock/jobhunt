@@ -50,6 +50,17 @@ def push_checkpoint(
         isn't configured. Otherwise keys ``db`` / ``entities`` each map to
         ``"ok"`` or ``"error: <reason>"``.
     """
+    # Split-brain guard: when APPLYPILOT_BACKEND=hetzner the server IS
+    # the authoritative writer and a laptop-initiated push would create
+    # divergence. Skip without erroring so the caller's stage-complete
+    # hook remains a safe no-op.
+    backend = os.environ.get("APPLYPILOT_BACKEND", "laptop").strip().lower()
+    if backend == "hetzner":
+        return {
+            "skipped": True,
+            "reason": "APPLYPILOT_BACKEND=hetzner; server is authoritative",
+        }
+
     host = remote_host or os.environ.get("JOBHUNT_REMOTE_SSH_HOST", "").strip()
     if not host:
         return {"skipped": True, "reason": "JOBHUNT_REMOTE_SSH_HOST not set"}
