@@ -2,11 +2,22 @@
 Unified LLM client for ApplyPilot.
 
 Auto-detects provider from environment:
-  GEMINI_API_KEY  -> Google Gemini (default: gemini-2.0-flash)
-  OPENAI_API_KEY  -> OpenAI (default: gpt-4o-mini)
-  LLM_URL         -> Local llama.cpp / Ollama compatible endpoint
+  ANTHROPIC_API_KEY -> Anthropic Claude (default: claude-sonnet-4-6)
+  GEMINI_API_KEY    -> Google Gemini (default: gemini-2.0-flash)
+  OPENAI_API_KEY    -> OpenAI (default: gpt-4o-mini)
+  LLM_URL           -> Local llama.cpp / Ollama compatible endpoint
 
-LLM_MODEL env var overrides the model name for any provider.
+LLM_MODEL env var overrides the model name for the default provider.
+
+Per-stage model overrides (heterogeneous routing):
+  SCORE_MODEL   -> used by scoring/scorer.py (per-job classifier; prefer cheap models)
+  TAILOR_MODEL  -> used by scoring/tailor.py (resume generation; prefer frontier)
+  JUDGE_MODEL   -> used by tailor.judge_tailored_resume (fabrication detector)
+  COVER_MODEL   -> used by scoring/cover_letter.py (tone/voice; mid-tier is fine)
+
+A per-stage override implies a separate client instance. The provider is
+inferred from the model name prefix (claude-*, gemini-*, gpt-*/o1-*). Short
+aliases "opus", "sonnet", "haiku" resolve to the current Anthropic model IDs.
 """
 
 import logging
@@ -21,27 +32,49 @@ log = logging.getLogger(__name__)
 # Provider detection
 # ---------------------------------------------------------------------------
 
+_ANTHROPIC_API_BASE = "https://api.anthropic.com/v1"
+_OPENAI_API_BASE = "https://api.openai.com/v1"
+
+# Short aliases -> current Anthropic model IDs. Update when new models ship.
+_CLAUDE_ALIASES = {
+    "opus": "claude-opus-4-7",
+    "sonnet": "claude-sonnet-4-6",
+    "haiku": "claude-haiku-4-5-20251001",
+}
+
+
 def _detect_provider() -> tuple[str, str, str]:
     """Return (base_url, model, api_key) based on environment variables.
 
     Reads env at call time (not module import time) so that load_env() called
     in _bootstrap() is always visible here.
     """
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
     gemini_key = os.environ.get("GEMINI_API_KEY", "")
     openai_key = os.environ.get("OPENAI_API_KEY", "")
     local_url = os.environ.get("LLM_URL", "")
     model_override = os.environ.get("LLM_MODEL", "")
 
+    # Gemini is checked before Anthropic so that existing wizard-configured
+    # setups keep Gemini as the default for scoring volume. Promote a stage
+    # to Anthropic via TAILOR_MODEL / JUDGE_MODEL / COVER_MODEL instead.
     if gemini_key and not local_url:
         return (
-            "https://generativelanguage.googleapis.com/v1beta/openai",
+            _GEMINI_COMPAT_BASE,
             model_override or "gemini-2.0-flash",
             gemini_key,
         )
 
+    if anthropic_key and not local_url:
+        return (
+            _ANTHROPIC_API_BASE,
+            _CLAUDE_ALIASES.get(model_override, model_override) or "claude-sonnet-4-6",
+            anthropic_key,
+        )
+
     if openai_key and not local_url:
         return (
-            "https://api.openai.com/v1",
+            _OPENAI_API_BASE,
             model_override or "gpt-4o-mini",
             openai_key,
         )
@@ -55,7 +88,48 @@ def _detect_provider() -> tuple[str, str, str]:
 
     raise RuntimeError(
         "No LLM provider configured. "
-        "Set GEMINI_API_KEY, OPENAI_API_KEY, or LLM_URL in your environment."
+        "Set ANTHROPIC_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY, or LLM_URL."
+    )
+
+
+def _resolve_from_model(spec: str) -> tuple[str, str, str]:
+    """Given a model spec (e.g. 'claude-opus-4-7', 'opus', 'gpt-4o-mini'),
+    return (base_url, full_model, api_key) for the appropriate provider.
+    """
+    spec = spec.strip()
+    model = _CLAUDE_ALIASES.get(spec, spec)
+
+    if model.startswith("claude-"):
+        key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not key:
+            raise RuntimeError(
+                f"ANTHROPIC_API_KEY required for Claude model '{model}'."
+            )
+        return (_ANTHROPIC_API_BASE, model, key)
+
+    if model.startswith("gemini-"):
+        key = os.environ.get("GEMINI_API_KEY", "")
+        if not key:
+            raise RuntimeError(
+                f"GEMINI_API_KEY required for Gemini model '{model}'."
+            )
+        return (_GEMINI_COMPAT_BASE, model, key)
+
+    if model.startswith("gpt-") or model.startswith("o1"):
+        key = os.environ.get("OPENAI_API_KEY", "")
+        if not key:
+            raise RuntimeError(
+                f"OPENAI_API_KEY required for OpenAI model '{model}'."
+            )
+        return (_OPENAI_API_BASE, model, key)
+
+    url = os.environ.get("LLM_URL", "")
+    if url:
+        return (url.rstrip("/"), model, os.environ.get("LLM_API_KEY", ""))
+
+    raise RuntimeError(
+        f"Cannot resolve provider for model '{model}'. "
+        "Use claude-*, gemini-*, gpt-* prefix, or set LLM_URL."
     )
 
 
@@ -92,6 +166,7 @@ class LLMClient:
         # True once we've confirmed the native Gemini API works for this model
         self._use_native_gemini: bool = False
         self._is_gemini: bool = base_url.startswith(_GEMINI_COMPAT_BASE)
+        self._is_anthropic: bool = base_url.startswith(_ANTHROPIC_API_BASE)
 
     # -- Native Gemini API --------------------------------------------------
 
@@ -143,6 +218,54 @@ class LLMClient:
         resp.raise_for_status()
         data = resp.json()
         return data["candidates"][0]["content"]["parts"][0]["text"]
+
+    # -- Native Anthropic API -----------------------------------------------
+
+    def _chat_native_anthropic(
+        self,
+        messages: list[dict],
+        temperature: float,
+        max_tokens: int,
+    ) -> str:
+        """Call the native Anthropic /v1/messages API.
+
+        The Anthropic schema separates the system prompt from the message
+        list, so we flatten any system messages into a single `system` field.
+        """
+        system_parts: list[str] = []
+        claude_messages: list[dict] = []
+        for msg in messages:
+            if msg["role"] == "system":
+                system_parts.append(msg.get("content", ""))
+            else:
+                claude_messages.append(
+                    {"role": msg["role"], "content": msg.get("content", "")}
+                )
+
+        payload: dict = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": claude_messages,
+        }
+        if system_parts:
+            payload["system"] = "\n\n".join(system_parts)
+
+        headers = {
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        }
+        resp = self._client.post(
+            f"{self.base_url}/messages",
+            json=payload,
+            headers=headers,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        # content is a list of blocks; concatenate text blocks in order.
+        parts = [b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"]
+        return "".join(parts)
 
     # -- OpenAI-compat API --------------------------------------------------
 
@@ -201,6 +324,9 @@ class LLMClient:
 
         for attempt in range(_MAX_RETRIES):
             try:
+                if self._is_anthropic:
+                    return self._chat_native_anthropic(messages, temperature, max_tokens)
+
                 # Route to native Gemini if we've already confirmed it's needed
                 if self._use_native_gemini:
                     return self._chat_native_gemini(messages, temperature, max_tokens)
@@ -285,10 +411,36 @@ class _GeminiCompatForbidden(Exception):
 # ---------------------------------------------------------------------------
 
 _instance: LLMClient | None = None
+_stage_clients: dict[tuple[str, str], LLMClient] = {}
 
 
-def get_client() -> LLMClient:
-    """Return (or create) the module-level LLMClient singleton."""
+def get_client(stage: str | None = None) -> LLMClient:
+    """Return an LLMClient.
+
+    If `stage` is set and the env var ``<STAGE>_MODEL`` is populated, returns a
+    dedicated client for that stage. Otherwise falls back to the default
+    auto-detected client (singleton).
+
+    Supported stage names (case-insensitive): ``score``, ``tailor``, ``judge``,
+    ``cover``. Each maps to ``SCORE_MODEL`` / ``TAILOR_MODEL`` / ``JUDGE_MODEL`` /
+    ``COVER_MODEL`` respectively.
+    """
+    if stage:
+        env_name = f"{stage.upper()}_MODEL"
+        model_spec = os.environ.get(env_name, "").strip()
+        if model_spec:
+            base_url, full_model, key = _resolve_from_model(model_spec)
+            cache_key = (base_url, full_model)
+            client = _stage_clients.get(cache_key)
+            if client is None:
+                log.info(
+                    "LLM stage=%s provider=%s model=%s",
+                    stage, base_url, full_model,
+                )
+                client = LLMClient(base_url, full_model, key)
+                _stage_clients[cache_key] = client
+            return client
+
     global _instance
     if _instance is None:
         base_url, model, api_key = _detect_provider()
