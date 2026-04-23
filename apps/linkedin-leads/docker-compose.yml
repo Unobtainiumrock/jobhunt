@@ -151,16 +151,16 @@ services:
   # rebuild needed for day-to-day iteration.
   pipeline:
     build:
-      context: /opt/BetterApplyPilot
+      context: ../applypilot
       dockerfile: infra/Dockerfile.pipeline
     image: jobhunt-pipeline:latest
     mem_limit: 1g
     profiles: ["ondemand"]
     volumes:
-      - /opt/BetterApplyPilot:/app
-      - /opt/jobhunt-core:/opt/jobhunt-core
+      - ../applypilot:/app
+      - ../../packages/jobhunt_core:/opt/jobhunt-core
       - /opt/jobhunt/data:/data
-      - /opt/linkedin-leads/profile:/opt/linkedin-leads/profile:ro
+      - ./profile:/opt/linkedin-leads/profile:ro
     environment:
       - APPLYPILOT_DIR=/data
       - APPLYPILOT_BACKEND=hetzner
