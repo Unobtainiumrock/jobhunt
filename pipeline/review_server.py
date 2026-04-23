@@ -64,6 +64,16 @@ DEFAULT_PORT = 3457
 SEND_HISTORY_FILE = DATA_DIR / "send_history.jsonl"
 MOBILE_TEMPLATE_FILE = Path(__file__).resolve().parent / "mobile_template.html"
 
+# JH-PH8: BAP pipeline data source. docker-compose mounts /opt/jobhunt/data
+# read-only at /jobhunt. ``/jobhunt/jobhunt.db`` is the authoritative SQLite
+# in Mode B; in Mode A it's the latest rsync push from the laptop. The
+# review UI only reads it — no writes — so we open with ``mode=ro`` to
+# prevent any code path from corrupting BAP state.
+JOBHUNT_DIR = Path("/jobhunt")
+JOBHUNT_DB = JOBHUNT_DIR / "jobhunt.db"
+JOBHUNT_RESUMES_DIR = JOBHUNT_DIR / "tailored_resumes"
+JOBHUNT_COVERS_DIR = JOBHUNT_DIR / "cover_letters"
+
 
 def _load_mobile_html() -> str:
     if not MOBILE_TEMPLATE_FILE.exists():
@@ -299,6 +309,8 @@ HTML_TEMPLATE = """\
   <button class="tab-btn active" onclick="setTab('replies')">Replies</button>
   <button class="tab-btn" onclick="setTab('followups')">Follow-ups</button>
   <button class="tab-btn" onclick="setTab('workflow')">Workflow</button>
+  <button class="tab-btn" onclick="setTab('applications')">Applications</button>
+  <button class="tab-btn" onclick="setTab('pipeline')">Pipeline</button>
 </div>
 
 <div class="stats" id="stats"></div>
@@ -307,6 +319,8 @@ HTML_TEMPLATE = """\
 <section id="replies-panel"></section>
 <section id="followups-panel" class="hidden"></section>
 <section id="workflow-panel" class="hidden"></section>
+<section id="applications-panel" class="hidden"></section>
+<section id="pipeline-panel" class="hidden"></section>
 
 <script>
 let state = {
@@ -314,6 +328,9 @@ let state = {
   followups: [],
   workflow: { applications: [], interview_loops: [], research_jobs: [], summary: {} },
   sendStatus: { running: false, history: [] },
+  applications: [],
+  pipelineStats: { stages: {}, last_run: {}, score_distribution: [], recent_errors: [] },
+  appFilter: 'all',
   activeTab: 'replies',
 };
 
@@ -326,27 +343,34 @@ function badgeClass(status) {
 
 function setTab(tab) {
   state.activeTab = tab;
-  const tabLabel = { replies: 'replies', followups: 'follow-ups', workflow: 'workflow' }[tab];
+  const tabLabel = {
+    replies: 'replies', followups: 'follow-ups', workflow: 'workflow',
+    applications: 'applications', pipeline: 'pipeline',
+  }[tab];
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.classList.toggle('active', btn.textContent.toLowerCase() === tabLabel);
   });
-  document.getElementById('replies-panel').classList.toggle('hidden', tab !== 'replies');
-  document.getElementById('followups-panel').classList.toggle('hidden', tab !== 'followups');
-  document.getElementById('workflow-panel').classList.toggle('hidden', tab !== 'workflow');
+  ['replies','followups','workflow','applications','pipeline'].forEach(t => {
+    document.getElementById(t + '-panel').classList.toggle('hidden', tab !== t);
+  });
   render();
 }
 
 async function load() {
-  const [repliesResp, workflowResp, followupsResp, sendResp] = await Promise.all([
+  const [repliesResp, workflowResp, followupsResp, sendResp, appsResp, statsResp] = await Promise.all([
     fetch('/api/drafts'),
     fetch('/api/workflow'),
     fetch('/api/followups'),
     fetch('/api/send/status'),
+    fetch('/api/applications'),
+    fetch('/api/pipeline-stats'),
   ]);
   state.replies = await repliesResp.json();
   state.workflow = await workflowResp.json();
   state.followups = await followupsResp.json();
   state.sendStatus = await sendResp.json();
+  state.applications = await appsResp.json();
+  state.pipelineStats = await statsResp.json();
   render();
 }
 
@@ -803,6 +827,160 @@ function render() {
   renderReplies();
   renderFollowups();
   renderWorkflow();
+  renderApplications();
+  renderPipeline();
+}
+
+// ── JH-PH8: Applications + Pipeline tabs ──────────────────────────────────
+
+function _appStatusClass(status) {
+  if (status === 'applied') return 'badge badge-green';
+  if (status === 'ready' || status === 'tailored') return 'badge badge-yellow';
+  if (status === 'in_progress') return 'badge badge-blue';
+  if (['failed','captcha','login_issue','expired','manual'].includes(status)) return 'badge badge-red';
+  return 'badge badge-blue';
+}
+
+function _filteredApplications() {
+  const f = state.appFilter;
+  if (f === 'all') return state.applications;
+  if (f === 'tailored+') {
+    return state.applications.filter(a => ['tailored','ready','in_progress','applied'].includes(a.status));
+  }
+  return state.applications.filter(a => a.status === f);
+}
+
+function setAppFilter(f) { state.appFilter = f; renderApplications(); }
+
+function _escape(s) {
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function _fmt_when(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const secs = (Date.now() - d.getTime()) / 1000;
+  if (secs < 60) return 'just now';
+  if (secs < 3600) return Math.floor(secs/60) + 'm ago';
+  if (secs < 86400) return Math.floor(secs/3600) + 'h ago';
+  return Math.floor(secs/86400) + 'd ago';
+}
+
+function renderApplications() {
+  const container = document.getElementById('applications-panel');
+  if (!container || state.activeTab !== 'applications') return;
+  const apps = _filteredApplications();
+  const filters = ['all','tailored+','applied','ready','tailored','scored_eligible','scored_below','failed','in_progress'];
+  const toolbar = `
+    <div class="toolbar" style="margin-bottom:1rem;display:flex;gap:0.4rem;flex-wrap:wrap;">
+      ${filters.map(f => `
+        <button class="tab-btn ${state.appFilter === f ? 'active' : ''}"
+                style="padding:0.35rem 0.75rem;font-size:0.8rem"
+                onclick="setAppFilter('${f}')">${f}</button>
+      `).join('')}
+      <span class="muted" style="margin-left:auto;align-self:center;">${apps.length} of ${state.applications.length}</span>
+    </div>
+  `;
+  if (apps.length === 0) {
+    container.innerHTML = toolbar + '<div class="empty">No applications match the current filter.</div>';
+    return;
+  }
+  container.innerHTML = toolbar + `
+    <table class="apps-table" style="width:100%;border-collapse:collapse;font-size:0.9rem;">
+      <thead>
+        <tr style="text-align:left;border-bottom:1px solid var(--border);">
+          <th style="padding:0.5rem;">Score</th>
+          <th style="padding:0.5rem;">Company</th>
+          <th style="padding:0.5rem;">Role</th>
+          <th style="padding:0.5rem;">Location</th>
+          <th style="padding:0.5rem;">Status</th>
+          <th style="padding:0.5rem;">Resume</th>
+          <th style="padding:0.5rem;">Cover</th>
+          <th style="padding:0.5rem;">Link</th>
+          <th style="padding:0.5rem;">When</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${apps.map(a => `
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:0.5rem;font-weight:700;">${a.fit_score ?? '—'}</td>
+            <td style="padding:0.5rem;">${_escape(a.company)}</td>
+            <td style="padding:0.5rem;">${_escape(a.title)}</td>
+            <td style="padding:0.5rem;color:var(--muted);">${_escape(a.location)}</td>
+            <td style="padding:0.5rem;"><span class="${_appStatusClass(a.status)}">${a.status}</span></td>
+            <td style="padding:0.5rem;">${a.tailored_resume_url ? `<a href="${a.tailored_resume_url}" target="_blank" style="color:var(--accent);">PDF</a>` : '—'}</td>
+            <td style="padding:0.5rem;">${a.cover_letter_url ? `<a href="${a.cover_letter_url}" target="_blank" style="color:var(--accent);">PDF</a>` : '—'}</td>
+            <td style="padding:0.5rem;">${a.application_url ? `<a href="${_escape(a.application_url)}" target="_blank" style="color:var(--muted);">↗</a>` : ''}</td>
+            <td style="padding:0.5rem;color:var(--muted);" title="${_escape(a.applied_at || a.tailored_at || a.discovered_at || '')}">${_fmt_when(a.applied_at || a.tailored_at || a.discovered_at)}</td>
+          </tr>
+          ${a.apply_error ? `<tr><td colspan="9" style="padding:0 0.5rem 0.75rem 4rem;color:var(--red);font-size:0.82rem;">error: ${_escape(a.apply_error)}</td></tr>` : ''}
+          ${a.score_reasoning ? `<tr><td colspan="9" style="padding:0 0.5rem 0.75rem 4rem;color:var(--muted);font-size:0.82rem;">${_escape(a.score_reasoning).slice(0,280)}</td></tr>` : ''}
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderPipeline() {
+  const container = document.getElementById('pipeline-panel');
+  if (!container || state.activeTab !== 'pipeline') return;
+  const s = state.pipelineStats;
+  const stage = (k) => s.stages?.[k] ?? 0;
+  const run = (k) => s.last_run?.[k] ? _fmt_when(s.last_run[k]) : '—';
+  const distBars = (s.score_distribution || []).map(d => {
+    const pct = Math.min(100, d.count * 3);
+    return `
+      <div style="display:flex;align-items:center;gap:0.5rem;margin:0.15rem 0;">
+        <div style="width:2rem;text-align:right;font-weight:600;">${d.score}</div>
+        <div style="flex:1;background:var(--surface-2);border-radius:4px;height:1rem;position:relative;">
+          <div style="width:${pct}%;height:100%;background:var(--accent);border-radius:4px;"></div>
+        </div>
+        <div style="width:2rem;color:var(--muted);">${d.count}</div>
+      </div>
+    `;
+  }).join('');
+  container.innerHTML = `
+    <div class="stats">
+      <div class="stat"><strong>${stage('total')}</strong>Discovered</div>
+      <div class="stat"><strong>${stage('enriched')}</strong>Enriched</div>
+      <div class="stat"><strong>${stage('scored')}</strong>Scored</div>
+      <div class="stat"><strong>${stage('eligible')}</strong>Eligible (≥7)</div>
+      <div class="stat"><strong>${stage('tailored')}</strong>Tailored</div>
+      <div class="stat"><strong>${stage('with_cover')}</strong>With cover</div>
+      <div class="stat"><strong>${stage('ready')}</strong>Ready to apply</div>
+      <div class="stat"><strong>${stage('in_progress')}</strong>In progress</div>
+      <div class="stat"><strong>${stage('applied')}</strong>Applied</div>
+      <div class="stat"><strong>${stage('failed')}</strong>Failed</div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:1.25rem;">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:1rem;">
+        <h3 style="font-size:1rem;margin-bottom:0.5rem;">Last run</h3>
+        <div>discovered: <span style="color:var(--muted);">${run('discovered')}</span></div>
+        <div>scored: <span style="color:var(--muted);">${run('scored')}</span></div>
+        <div>tailored: <span style="color:var(--muted);">${run('tailored')}</span></div>
+        <div>applied: <span style="color:var(--muted);">${run('applied')}</span></div>
+        <div>last attempt: <span style="color:var(--muted);">${run('attempted')}</span></div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:1rem;">
+        <h3 style="font-size:1rem;margin-bottom:0.5rem;">Score distribution</h3>
+        ${distBars || '<div class="empty">No scored rows yet.</div>'}
+      </div>
+    </div>
+    ${(s.recent_errors && s.recent_errors.length) ? `
+      <div style="margin-top:1.25rem;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:1rem;">
+        <h3 style="font-size:1rem;margin-bottom:0.5rem;">Recent apply errors</h3>
+        ${s.recent_errors.map(e => `
+          <div style="padding:0.35rem 0;border-bottom:1px solid var(--border);font-size:0.85rem;">
+            <strong>${_escape(e.title)}</strong>
+            <span class="muted" style="margin-left:0.5rem;">${_fmt_when(e.at)}</span>
+            <div style="color:var(--red);">${_escape(e.error)}</div>
+          </div>
+        `).join('')}
+      </div>
+    ` : ''}
+  `;
 }
 
 function _setActionPending(buttonEl, label) {
@@ -936,6 +1114,153 @@ load();
 </body>
 </html>
 """
+
+
+# ---------------------------------------------------------------------------
+# JH-PH8: BAP applications + pipeline-stats payloads
+# ---------------------------------------------------------------------------
+
+def _jobhunt_conn():
+    """Open the BAP SQLite read-only. Returns None if the mount is absent
+    (e.g., running outside the compose stack) so handlers can degrade to
+    an empty-state response rather than 500."""
+    import sqlite3
+    if not JOBHUNT_DB.exists():
+        return None
+    return sqlite3.connect(
+        f"file:{JOBHUNT_DB}?mode=ro&immutable=1", uri=True,
+        check_same_thread=False,
+    )
+
+
+def _derive_status(row: dict[str, Any]) -> str:
+    """Collapse the multi-column BAP state into a single status token for UI."""
+    if row.get("applied_at"):
+        return "applied"
+    s = (row.get("apply_status") or "").lower()
+    if s == "in_progress":
+        return "in_progress"
+    if s in {"failed", "captcha", "login_issue", "expired", "manual"}:
+        return s
+    if row.get("tailored_resume_path") and row.get("application_url"):
+        return "ready"
+    if row.get("tailored_resume_path"):
+        return "tailored"
+    if row.get("fit_score") is not None:
+        return "scored_eligible" if row["fit_score"] >= 7 else "scored_below"
+    if row.get("full_description"):
+        return "enriched"
+    return "discovered"
+
+
+def _pdf_link(field_value: str | None, kind: str) -> str | None:
+    """Map a container-side ``/data/tailored_resumes/foo.pdf`` (or host
+    equivalent) to the ``/jobhunt/<kind>/foo.pdf`` URL this server serves.
+
+    Returns None if the referenced file isn't actually on disk — the UI
+    skips the link rather than producing a broken 404.
+    """
+    if not field_value:
+        return None
+    name = Path(field_value).name
+    base = JOBHUNT_RESUMES_DIR if kind == "resume" else JOBHUNT_COVERS_DIR
+    if not (base / name).exists():
+        return None
+    return f"/jobhunt/{kind}/{name}"
+
+
+def _build_applications_payload() -> list[dict[str, Any]]:
+    conn = _jobhunt_conn()
+    if conn is None:
+        return []
+    try:
+        conn.row_factory = __import__("sqlite3").Row
+        rows = conn.execute(
+            "SELECT url, title, site, location, salary, fit_score, score_reasoning, "
+            "       tailored_resume_path, cover_letter_path, application_url, "
+            "       discovered_at, tailored_at, applied_at, apply_status, apply_error, "
+            "       apply_duration_ms, full_description "
+            "FROM jobs ORDER BY fit_score DESC NULLS LAST, discovered_at DESC"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        out.append({
+            "url": d["url"],
+            "title": d["title"] or "",
+            "company": d["site"] or "",
+            "location": d["location"] or "",
+            "salary_hint": d["salary"] or "",
+            "fit_score": d["fit_score"],
+            "score_reasoning": d["score_reasoning"] or "",
+            "status": _derive_status(d),
+            "tailored_resume_url": _pdf_link(d["tailored_resume_path"], "resume"),
+            "cover_letter_url": _pdf_link(d["cover_letter_path"], "cover"),
+            "application_url": d["application_url"] or d["url"],
+            "discovered_at": d["discovered_at"],
+            "tailored_at": d["tailored_at"],
+            "applied_at": d["applied_at"],
+            "apply_error": d["apply_error"] or "",
+            "apply_duration_ms": d["apply_duration_ms"],
+        })
+    return out
+
+
+def _build_pipeline_stats_payload() -> dict[str, Any]:
+    conn = _jobhunt_conn()
+    if conn is None:
+        return {"stages": {}, "last_run": {}, "score_distribution": [], "recent_errors": []}
+    try:
+        stages = dict(conn.execute(
+            "SELECT 'total',                 COUNT(*) FROM jobs "
+            "UNION ALL SELECT 'enriched',    COUNT(*) FROM jobs WHERE full_description IS NOT NULL "
+            "UNION ALL SELECT 'scored',      COUNT(*) FROM jobs WHERE fit_score IS NOT NULL "
+            "UNION ALL SELECT 'eligible',    COUNT(*) FROM jobs WHERE fit_score >= 7 "
+            "UNION ALL SELECT 'tailored',    COUNT(*) FROM jobs WHERE tailored_resume_path IS NOT NULL "
+            "UNION ALL SELECT 'with_cover',  COUNT(*) FROM jobs WHERE cover_letter_path IS NOT NULL "
+            "UNION ALL SELECT 'ready',       COUNT(*) FROM jobs WHERE tailored_resume_path IS NOT NULL "
+            "                                                        AND application_url IS NOT NULL "
+            "                                                        AND apply_status IS NULL "
+            "                                                        AND applied_at IS NULL "
+            "UNION ALL SELECT 'in_progress', COUNT(*) FROM jobs WHERE apply_status = 'in_progress' "
+            "UNION ALL SELECT 'applied',     COUNT(*) FROM jobs WHERE applied_at IS NOT NULL "
+            "UNION ALL SELECT 'failed',      COUNT(*) FROM jobs WHERE apply_status IN "
+            "                                                        ('failed','captcha','login_issue','expired','manual')"
+        ).fetchall())
+        last_run = dict(conn.execute(
+            "SELECT 'discovered', MAX(discovered_at) FROM jobs "
+            "UNION ALL SELECT 'scored',    MAX(scored_at)         FROM jobs "
+            "UNION ALL SELECT 'tailored',  MAX(tailored_at)       FROM jobs "
+            "UNION ALL SELECT 'applied',   MAX(applied_at)        FROM jobs "
+            "UNION ALL SELECT 'attempted', MAX(last_attempted_at) FROM jobs"
+        ).fetchall())
+        score_dist = [
+            {"score": s, "count": c}
+            for s, c in conn.execute(
+                "SELECT fit_score, COUNT(*) FROM jobs "
+                "WHERE fit_score IS NOT NULL GROUP BY fit_score ORDER BY fit_score DESC"
+            ).fetchall()
+        ]
+        errors = [
+            {"url": u, "title": t, "stage": "apply", "error": e, "at": ts}
+            for u, t, e, ts in conn.execute(
+                "SELECT url, title, apply_error, last_attempted_at FROM jobs "
+                "WHERE apply_error IS NOT NULL "
+                "ORDER BY last_attempted_at DESC LIMIT 10"
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+    return {
+        "stages": stages,
+        "last_run": {k: v for k, v in last_run.items() if v},
+        "score_distribution": score_dist,
+        "recent_errors": errors,
+    }
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -1482,6 +1807,14 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._serve_followups()
         elif self.path == "/api/send/status":
             self._serve_send_status()
+        elif self.path == "/api/applications":
+            self._serve_applications()
+        elif self.path == "/api/pipeline-stats":
+            self._serve_pipeline_stats()
+        elif self.path.startswith("/jobhunt/resume/"):
+            self._serve_jobhunt_pdf(JOBHUNT_RESUMES_DIR, self.path[len("/jobhunt/resume/"):])
+        elif self.path.startswith("/jobhunt/cover/"):
+            self._serve_jobhunt_pdf(JOBHUNT_COVERS_DIR, self.path[len("/jobhunt/cover/"):])
         elif self.path == "/m/" or self.path == "/m":
             self._serve_mobile_html()
         elif self.path.startswith("/m/api/drafts"):
@@ -1489,6 +1822,39 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 self._serve_mobile_drafts()
         else:
             self.send_error(404)
+
+    def _serve_applications(self) -> None:
+        self._write_json(200, _build_applications_payload())
+
+    def _serve_pipeline_stats(self) -> None:
+        self._write_json(200, _build_pipeline_stats_payload())
+
+    def _serve_jobhunt_pdf(self, base_dir: Path, name: str) -> None:
+        """File-serve a tailored resume / cover letter PDF from the read-only
+        JH-PH8 mount. Rejects anything that escapes the base directory."""
+        from urllib.parse import unquote
+        name = unquote(name)
+        # Disallow traversal components outright — basename resolution is
+        # defense-in-depth on top of the ``:ro`` compose mount.
+        if "/" in name or ".." in name or not name:
+            self.send_error(404)
+            return
+        path = base_dir / name
+        try:
+            if not path.is_file() or not path.resolve().is_relative_to(base_dir.resolve()):
+                self.send_error(404)
+                return
+        except (OSError, ValueError):
+            self.send_error(404)
+            return
+        data = path.read_bytes()
+        self.send_response(200)
+        content_type = "application/pdf" if name.lower().endswith(".pdf") else "text/plain; charset=utf-8"
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "private, max-age=60")
+        self.end_headers()
+        self.wfile.write(data)
 
     def do_POST(self) -> None:
         if self.path == "/api/action":
