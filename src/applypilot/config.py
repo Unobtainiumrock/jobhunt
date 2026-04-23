@@ -168,6 +168,12 @@ DEFAULTS = {
     "poll_interval": 60,
     "apply_timeout": 300,
     "viewport": "1280x900",
+    # Retention: tailored resumes and cover letters older than this are purged
+    # by the `cleanup` pipeline stage. Counted from tailored_at / cover_letter_at.
+    # Applied jobs get a longer window so proof-of-submission survives an
+    # extra month for audit / reapply purposes.
+    "retention_days": 180,
+    "retention_days_applied": 210,
 }
 
 

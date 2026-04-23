@@ -26,7 +26,7 @@ console = Console()
 log = logging.getLogger(__name__)
 
 # Valid pipeline stages (in execution order)
-VALID_STAGES = ("discover", "enrich", "score", "tailor", "cover", "pdf")
+VALID_STAGES = ("cleanup", "discover", "enrich", "score", "tailor", "cover", "pdf")
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +87,10 @@ def run(
     workers: int = typer.Option(1, "--workers", "-w", help="Parallel threads for discovery/enrichment stages."),
     stream: bool = typer.Option(False, "--stream", help="Run stages concurrently (streaming mode)."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview stages without executing."),
+    cleanup_dry_run: bool = typer.Option(
+        False, "--cleanup-dry-run",
+        help="Run the cleanup stage in dry-run mode — logs what would be deleted without touching disk or DB.",
+    ),
     validation: str = typer.Option(
         "normal",
         "--validation",
@@ -136,6 +140,7 @@ def run(
         stream=stream,
         workers=workers,
         validation_mode=validation,
+        cleanup_dry_run=cleanup_dry_run,
     )
 
     if result.get("errors"):

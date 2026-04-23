@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from applypilot.config import COVER_LETTER_DIR, RESUME_PATH, load_profile
 from applypilot.database import get_connection, get_jobs_by_stage
 from applypilot.llm import get_client
+from applypilot.scoring.guardrails import ADVERSARIAL_GUARDRAILS
 from applypilot.scoring.validator import (
     BANNED_WORDS,
     LLM_LEAK_PHRASES,
@@ -93,6 +94,8 @@ VOICE:
 FABRICATION = INSTANT REJECTION:
 The candidate's real tools are ONLY: {skills_str}.
 Do NOT mention ANY tool not in this list. If the job asks for tools not listed, talk about the work you did, not the tools.
+
+{ADVERSARIAL_GUARDRAILS}
 
 Sign off: just "{sign_off_name}"
 

@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from applypilot import config
+from applypilot.scoring.guardrails import ADVERSARIAL_GUARDRAILS
 
 logger = logging.getLogger(__name__)
 
@@ -540,6 +541,8 @@ Submit a complete, accurate application. Use the profile and resume as source da
 If something unexpected happens and these instructions don't cover it, figure it out yourself. You are autonomous. Navigate pages, read content, try buttons, explore the site. The goal is always the same: submit the application. Do whatever it takes to reach that goal.
 
 {hard_rules}
+
+{ADVERSARIAL_GUARDRAILS}
 
 == NEVER DO THESE (immediate RESULT:FAILED if encountered) ==
 - NEVER grant camera, microphone, screen sharing, or location permissions. If a site requests them -> RESULT:FAILED:unsafe_permissions

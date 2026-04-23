@@ -32,9 +32,10 @@ console = Console()
 # Stage definitions
 # ---------------------------------------------------------------------------
 
-STAGE_ORDER = ("discover", "enrich", "score", "tailor", "cover", "pdf")
+STAGE_ORDER = ("cleanup", "discover", "enrich", "score", "tailor", "cover", "pdf")
 
 STAGE_META: dict[str, dict] = {
+    "cleanup":  {"desc": "Retention sweep (delete tailored resumes/cover letters past TTL)"},
     "discover": {"desc": "Job discovery (JobSpy + Workday + smart extract)"},
     "enrich":   {"desc": "Detail enrichment (full descriptions + apply URLs)"},
     "score":    {"desc": "LLM scoring (fit 1-10)"},
@@ -44,8 +45,9 @@ STAGE_META: dict[str, dict] = {
 }
 
 # Upstream dependency: a stage only finishes when its upstream is done AND
-# it has no remaining pending work.
+# it has no remaining pending work. Cleanup runs standalone at the head.
 _UPSTREAM: dict[str, str | None] = {
+    "cleanup":  None,
     "discover": None,
     "enrich":   "discover",
     "score":    "enrich",
@@ -154,8 +156,20 @@ def _run_pdf() -> dict:
         return {"status": f"error: {e}"}
 
 
+def _run_cleanup(cleanup_dry_run: bool = False) -> dict:
+    """Stage: Retention sweep — delete tailored resumes/cover letters past TTL."""
+    try:
+        from applypilot.retention import purge_expired
+        result = purge_expired(dry_run=cleanup_dry_run)
+        return {"status": "ok", **result}
+    except Exception as e:
+        log.error("Cleanup failed: %s", e)
+        return {"status": f"error: {e}"}
+
+
 # Map stage names to their runner functions
 _STAGE_RUNNERS: dict[str, callable] = {
+    "cleanup":  _run_cleanup,
     "discover": _run_discover,
     "enrich":   _run_enrich,
     "score":    _run_score,
@@ -262,6 +276,7 @@ def _run_stage_streaming(
     min_score: int = 7,
     workers: int = 1,
     validation_mode: str = "normal",
+    cleanup_dry_run: bool = False,
 ) -> None:
     """Run a single stage in streaming mode: loop until upstream done + no work.
 
@@ -276,11 +291,13 @@ def _run_stage_streaming(
         kwargs["validation_mode"] = validation_mode
     if stage in ("discover", "enrich"):
         kwargs["workers"] = workers
+    if stage == "cleanup":
+        kwargs["cleanup_dry_run"] = cleanup_dry_run
 
     upstream = _UPSTREAM[stage]
 
-    if stage == "discover":
-        # Discover runs once (its sub-scrapers already do their full crawl)
+    if stage in ("discover", "cleanup"):
+        # Runs once, no polling loop.
         try:
             result = runner(**kwargs)
             tracker.mark_done(stage, result)
@@ -324,7 +341,8 @@ def _run_stage_streaming(
 # ---------------------------------------------------------------------------
 
 def _run_sequential(ordered: list[str], min_score: int, workers: int = 1,
-                    validation_mode: str = "normal") -> dict:
+                    validation_mode: str = "normal",
+                    cleanup_dry_run: bool = False) -> dict:
     """Execute stages one at a time (original behavior)."""
     results: list[dict] = []
     errors: dict[str, str] = {}
@@ -347,6 +365,8 @@ def _run_sequential(ordered: list[str], min_score: int, workers: int = 1,
                 kwargs["validation_mode"] = validation_mode
             if name in ("discover", "enrich"):
                 kwargs["workers"] = workers
+            if name == "cleanup":
+                kwargs["cleanup_dry_run"] = cleanup_dry_run
             result = runner(**kwargs)
             elapsed = time.time() - t0
 
@@ -378,7 +398,8 @@ def _run_sequential(ordered: list[str], min_score: int, workers: int = 1,
 
 
 def _run_streaming(ordered: list[str], min_score: int, workers: int = 1,
-                   validation_mode: str = "normal") -> dict:
+                   validation_mode: str = "normal",
+                   cleanup_dry_run: bool = False) -> dict:
     """Execute stages concurrently with DB as conveyor belt."""
     tracker = _StageTracker()
     stop_event = threading.Event()
@@ -400,7 +421,7 @@ def _run_streaming(ordered: list[str], min_score: int, workers: int = 1,
         start_times[name] = time.time()
         t = threading.Thread(
             target=_run_stage_streaming,
-            args=(name, tracker, stop_event, min_score, workers, validation_mode),
+            args=(name, tracker, stop_event, min_score, workers, validation_mode, cleanup_dry_run),
             name=f"stage-{name}",
             daemon=True,
         )
@@ -448,6 +469,7 @@ def run_pipeline(
     stream: bool = False,
     workers: int = 1,
     validation_mode: str = "normal",
+    cleanup_dry_run: bool = False,
 ) -> dict:
     """Run pipeline stages.
 
@@ -457,6 +479,8 @@ def run_pipeline(
         dry_run: If True, preview stages without executing.
         stream: If True, run stages concurrently (streaming mode).
         workers: Number of parallel threads for discovery/enrichment stages.
+        cleanup_dry_run: If True, the cleanup stage logs what would be deleted
+            without touching disk or DB. Orthogonal to dry_run.
 
     Returns:
         Dict with keys: stages (list of result dicts), errors (dict), elapsed (float).
@@ -498,10 +522,12 @@ def run_pipeline(
     # Execute
     if stream:
         result = _run_streaming(ordered, min_score, workers=workers,
-                                validation_mode=validation_mode)
+                                validation_mode=validation_mode,
+                                cleanup_dry_run=cleanup_dry_run)
     else:
         result = _run_sequential(ordered, min_score, workers=workers,
-                                 validation_mode=validation_mode)
+                                 validation_mode=validation_mode,
+                                 cleanup_dry_run=cleanup_dry_run)
 
     # Summary table
     console.print(f"\n{'=' * 70}")

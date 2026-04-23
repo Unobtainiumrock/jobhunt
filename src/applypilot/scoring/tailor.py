@@ -19,6 +19,7 @@ from pathlib import Path
 from applypilot.config import RESUME_PATH, TAILORED_DIR, load_profile
 from applypilot.database import get_connection, get_jobs_by_stage
 from applypilot.llm import get_client
+from applypilot.scoring.guardrails import ADVERSARIAL_GUARDRAILS
 from applypilot.scoring.validator import (
     BANNED_WORDS,
     FABRICATION_WATCHLIST,
@@ -111,6 +112,8 @@ BULLETS: Strong verb + what you built + quantified impact. Vary verbs (Built, De
 - Preserved companies: {companies_str} -- names stay as-is
 - Preserved school: {school}
 - Must fit 1 page.
+
+{ADVERSARIAL_GUARDRAILS}
 
 ## OUTPUT: Return ONLY valid JSON. No markdown fences. No commentary. No "here is" preamble.
 
