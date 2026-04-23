@@ -292,6 +292,15 @@ def sync_entities(
     if result["errors"]:
         console.print(f"[yellow]{result['errors']} record(s) failed[/yellow]")
 
+    # Propagate to the remote jobhunt volume if configured
+    try:
+        from applypilot.sync.remote import push_now
+        push = push_now()
+        if not push.get("skipped"):
+            console.print(f"[cyan]Remote push:[/cyan] {push}")
+    except Exception as exc:  # pragma: no cover — defensive
+        console.print(f"[yellow]Remote push failed (non-blocking):[/yellow] {exc}")
+
 
 @app.command()
 def status() -> None:

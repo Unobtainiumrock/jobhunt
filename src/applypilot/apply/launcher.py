@@ -183,11 +183,11 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
 
 
 def _sync_opportunity_for_url(url: str) -> None:
-    """Best-effort: write the single Opportunity JSON for a url after status change.
+    """Best-effort: project the single Opportunity JSON for a url, then push remote.
 
-    Called on every apply-stage transition. Failures log and continue — the
-    JSON projection is downstream visibility, never reason to fail the
-    actual apply.
+    Called on every apply-stage transition (mark_result, mark_job). Failures
+    in either step log and continue — the JSON projection and the remote
+    rsync are downstream visibility, never reason to fail the actual apply.
     """
     try:
         from applypilot.sync.entity_exporter import export_opportunity
@@ -198,6 +198,12 @@ def _sync_opportunity_for_url(url: str) -> None:
         export_opportunity(dict(row))
     except Exception as exc:  # pragma: no cover — defensive
         logger.warning("Opportunity export failed for %s: %s", url, exc)
+
+    try:
+        from applypilot.sync.remote import push_now
+        push_now()
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning("Remote push after apply-transition for %s failed: %s", url, exc)
 
 
 def mark_result(url: str, status: str, error: str | None = None,

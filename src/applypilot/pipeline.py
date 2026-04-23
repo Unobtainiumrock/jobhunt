@@ -98,6 +98,7 @@ def _run_discover(workers: int = 1) -> dict:
         console.print(f"  [red]Smart extract error:[/red] {e}")
         stats["smartextract"] = f"error: {e}"
 
+    _push_remote_after_stage("discover")
     return stats
 
 
@@ -106,18 +107,33 @@ def _run_enrich(workers: int = 1) -> dict:
     try:
         from applypilot.enrichment.detail import run_enrichment
         run_enrichment(workers=workers)
+        _push_remote_after_stage("enrich")
         return {"status": "ok"}
     except Exception as e:
         log.error("Enrichment failed: %s", e)
         return {"status": f"error: {e}"}
 
 
-def _sync_entities_after_stage(stage: str, min_fit_score: int = 0) -> None:
-    """Best-effort Opportunity JSON projection after a stage finishes.
+def _push_remote_after_stage(stage: str) -> None:
+    """Best-effort remote rsync after a stage. Non-blocking.
 
-    Non-blocking — failures (missing linkedin-leads dir, schema drift, etc.)
-    log and continue. Entities export is a downstream convenience; never
-    reason to fail a pipeline stage on it.
+    No-op unless ``JOBHUNT_REMOTE_SSH_HOST`` is configured. Pushes the
+    local SQLite + entities dir so a laptop dying after this stage
+    leaves the remote within seconds of the true state.
+    """
+    try:
+        from applypilot.sync.remote import push_now
+        push_now()
+    except Exception as exc:  # pragma: no cover — defensive
+        log.warning("Remote push after %s failed: %s", stage, exc)
+
+
+def _sync_entities_after_stage(stage: str, min_fit_score: int = 0) -> None:
+    """Opportunity JSON projection + remote checkpoint after a stage.
+
+    For stages that produce meaningful per-opportunity content (score,
+    tailor, cover): render the full entity projection locally, then push
+    DB + entities remote. Failures in either step log and continue.
     """
     try:
         from applypilot.sync.entity_exporter import sync_from_db
@@ -126,6 +142,8 @@ def _sync_entities_after_stage(stage: str, min_fit_score: int = 0) -> None:
                  stage, result["written"], result["errors"])
     except Exception as exc:  # pragma: no cover — defensive
         log.warning("Entities sync after %s failed: %s", stage, exc)
+
+    _push_remote_after_stage(stage)
 
 
 def _run_score() -> dict:
@@ -157,6 +175,7 @@ def _run_cover(min_score: int = 7, validation_mode: str = "normal") -> dict:
     try:
         from applypilot.scoring.cover_letter import run_cover_letters
         run_cover_letters(min_score=min_score, validation_mode=validation_mode)
+        _sync_entities_after_stage("cover", min_fit_score=min_score)
         return {"status": "ok"}
     except Exception as e:
         log.error("Cover letter generation failed: %s", e)
@@ -168,6 +187,7 @@ def _run_pdf() -> dict:
     try:
         from applypilot.scoring.pdf import batch_convert
         batch_convert()
+        _push_remote_after_stage("pdf")
         return {"status": "ok"}
     except Exception as e:
         log.error("PDF conversion failed: %s", e)
