@@ -1,8 +1,8 @@
-"""ApplyPilot database layer: schema, migrations, stats, and connection helpers.
-
-Single source of truth for the jobs table schema. All columns from every
-pipeline stage are created up front so any stage can run independently
-without migration ordering issues.
+"""ApplyPilot database layer: connection management + applypilot-specific
+queries (stats, stage filters, bulk insert). The jobs schema itself and its
+forward-only migration live in :mod:`jobhunt_core.store.jobs` so a future
+consumer (linkedin-leads, or the Phase-9 monorepo) can read and validate
+applypilot's jobs table without duplicating the column list.
 """
 
 import sqlite3
@@ -11,6 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from applypilot.config import DB_PATH
+from jobhunt_core.store.jobs import (
+    JOBS_COLUMN_REGISTRY,
+    create_jobs_table,
+    ensure_jobs_columns,
+)
 
 # Thread-local connection storage — each thread gets its own connection
 # (required for SQLite thread safety with parallel workers)
@@ -60,163 +65,38 @@ def close_connection(db_path: Path | str | None = None) -> None:
 
 
 def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
-    """Create the full jobs table with all columns from every pipeline stage.
+    """Open the jobs database, creating the table and running forward migrations.
 
-    This is idempotent -- safe to call on every startup. Uses CREATE TABLE IF NOT EXISTS
-    so it won't destroy existing data.
-
-    Schema columns by stage:
-      - Discovery:  url, title, salary, description, location, site, strategy, discovered_at
-      - Enrichment: full_description, application_url, detail_scraped_at, detail_error
-      - Scoring:    fit_score, score_reasoning, scored_at
-      - Tailoring:  tailored_resume_path, tailored_at, tailor_attempts
-      - Cover:      cover_letter_path, cover_letter_at, cover_attempts
-      - Apply:      applied_at, apply_status, apply_error, apply_attempts,
-                   agent_id, last_attempted_at, apply_duration_ms, apply_task_id,
-                   verification_confidence
+    Idempotent. The schema and column registry live in
+    :mod:`jobhunt_core.store.jobs`; this function's job is to own the
+    file location, the connection, and the pragmas (WAL, busy timeout,
+    row factory) that are applypilot-specific.
 
     Args:
-        db_path: Override the default DB_PATH.
+        db_path: Override the default ``DB_PATH``.
 
     Returns:
-        sqlite3.Connection with the schema initialized.
+        ``sqlite3.Connection`` with schema initialized and current.
     """
     path = db_path or DB_PATH
-
-    # Ensure parent directory exists
     Path(path).parent.mkdir(parents=True, exist_ok=True)
 
     conn = get_connection(path)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS jobs (
-            -- Discovery stage (smart_extract / job_search)
-            url                   TEXT PRIMARY KEY,
-            title                 TEXT,
-            salary                TEXT,
-            description           TEXT,
-            location              TEXT,
-            site                  TEXT,
-            strategy              TEXT,
-            discovered_at         TEXT,
-
-            -- Enrichment stage (detail_scraper)
-            full_description      TEXT,
-            application_url       TEXT,
-            detail_scraped_at     TEXT,
-            detail_error          TEXT,
-
-            -- Scoring stage (job_scorer)
-            fit_score             INTEGER,
-            score_reasoning       TEXT,
-            scored_at             TEXT,
-
-            -- Tailoring stage (resume tailor)
-            tailored_resume_path  TEXT,
-            tailored_at           TEXT,
-            tailor_attempts       INTEGER DEFAULT 0,
-
-            -- Cover letter stage
-            cover_letter_path     TEXT,
-            cover_letter_at       TEXT,
-            cover_attempts        INTEGER DEFAULT 0,
-
-            -- Application stage
-            applied_at            TEXT,
-            apply_status          TEXT,
-            apply_error           TEXT,
-            apply_attempts        INTEGER DEFAULT 0,
-            agent_id              TEXT,
-            last_attempted_at     TEXT,
-            apply_duration_ms     INTEGER,
-            apply_task_id         TEXT,
-            verification_confidence TEXT
-        )
-    """)
-    conn.commit()
-
-    # Run migrations for any columns added after initial schema
-    ensure_columns(conn)
-
+    create_jobs_table(conn)
+    ensure_jobs_columns(conn)
     return conn
 
 
-# Complete column registry: column_name -> SQL type with optional default.
-# This is the single source of truth. Adding a column here is all that's needed
-# for it to appear in both new databases and migrated ones.
-_ALL_COLUMNS: dict[str, str] = {
-    # Discovery
-    "url": "TEXT PRIMARY KEY",
-    "title": "TEXT",
-    "salary": "TEXT",
-    "description": "TEXT",
-    "location": "TEXT",
-    "site": "TEXT",
-    "strategy": "TEXT",
-    "discovered_at": "TEXT",
-    # Enrichment
-    "full_description": "TEXT",
-    "application_url": "TEXT",
-    "detail_scraped_at": "TEXT",
-    "detail_error": "TEXT",
-    # Scoring
-    "fit_score": "INTEGER",
-    "score_reasoning": "TEXT",
-    "scored_at": "TEXT",
-    # Tailoring
-    "tailored_resume_path": "TEXT",
-    "tailored_at": "TEXT",
-    "tailor_attempts": "INTEGER DEFAULT 0",
-    # Cover letter
-    "cover_letter_path": "TEXT",
-    "cover_letter_at": "TEXT",
-    "cover_attempts": "INTEGER DEFAULT 0",
-    # Application
-    "applied_at": "TEXT",
-    "apply_status": "TEXT",
-    "apply_error": "TEXT",
-    "apply_attempts": "INTEGER DEFAULT 0",
-    "agent_id": "TEXT",
-    "last_attempted_at": "TEXT",
-    "apply_duration_ms": "INTEGER",
-    "apply_task_id": "TEXT",
-    "verification_confidence": "TEXT",
-}
-
-
 def ensure_columns(conn: sqlite3.Connection | None = None) -> list[str]:
-    """Add any missing columns to the jobs table (forward migration).
+    """Backward-compat alias. Forward-migrate the jobs table.
 
-    Reads the current table schema via PRAGMA table_info and compares against
-    the full column registry. Any missing columns are added with ALTER TABLE.
-
-    This makes it safe to upgrade the database from any previous version --
-    columns are only added, never removed or renamed.
-
-    Args:
-        conn: Database connection. Uses get_connection() if None.
-
-    Returns:
-        List of column names that were added (empty if schema was already current).
+    Delegates to :func:`jobhunt_core.store.jobs.ensure_jobs_columns` so the
+    column registry stays single-sourced. Kept as a top-level symbol here
+    because ``applypilot.enrichment.detail`` imports it by this name.
     """
     if conn is None:
         conn = get_connection()
-
-    existing = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
-    added = []
-
-    for col, dtype in _ALL_COLUMNS.items():
-        if col not in existing:
-            # PRIMARY KEY columns can't be added via ALTER TABLE, but url
-            # is always created with the table itself so this is safe
-            if "PRIMARY KEY" in dtype:
-                continue
-            conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {dtype}")
-            added.append(col)
-
-    if added:
-        conn.commit()
-
-    return added
+    return ensure_jobs_columns(conn)
 
 
 def get_stats(conn: sqlite3.Connection | None = None) -> dict:
