@@ -2,9 +2,23 @@
 profile.json
 resume.txt
 resume.pdf
+resume.*
 *.env
+.env
 .env.*
 !.env.example
+
+# Credentials / secrets (belt-and-suspenders generic patterns)
+*.key
+*.pem
+*.p12
+*.pfx
+credentials.json
+secrets.json
+*secret*
+*credential*
+!*credentials.example*
+!*secret.example*
 
 # Runtime artifacts
 *.db
