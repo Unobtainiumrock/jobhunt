@@ -261,6 +261,38 @@ def apply(
     )
 
 
+@app.command("sync-entities")
+def sync_entities(
+    min_fit_score: int = typer.Option(
+        0, "--min-score",
+        help="Only export jobs with fit_score >= N. 0 = export all.",
+    ),
+    target: Optional[str] = typer.Option(
+        None, "--target",
+        help="Override entities dir. Defaults to JOBHUNT_ENTITIES_DIR env or "
+             "~/Desktop/github/linkedin-leads/data/entities.",
+    ),
+) -> None:
+    """Export SQLite jobs as Opportunity JSON for the unified entity store.
+
+    Writes to ``<target>/opportunities/<stable-id>.json``. Idempotent —
+    re-running overwrites records in place while preserving the stable ID
+    ``opp_<slug>_<hash12>`` which matches linkedin-leads's ID scheme.
+    """
+    _bootstrap()
+    from pathlib import Path
+    from applypilot.sync.entity_exporter import sync_from_db, entities_dir
+
+    target_dir = Path(target).expanduser() if target else entities_dir()
+    result = sync_from_db(min_fit_score=min_fit_score, target_dir=target_dir)
+    console.print(
+        f"[green]Wrote {result['written']} Opportunity records[/green] to "
+        f"{target_dir / 'opportunities'}"
+    )
+    if result["errors"]:
+        console.print(f"[yellow]{result['errors']} record(s) failed[/yellow]")
+
+
 @app.command()
 def status() -> None:
     """Show pipeline statistics from the database."""

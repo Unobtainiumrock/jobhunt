@@ -182,6 +182,24 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
         raise
 
 
+def _sync_opportunity_for_url(url: str) -> None:
+    """Best-effort: write the single Opportunity JSON for a url after status change.
+
+    Called on every apply-stage transition. Failures log and continue — the
+    JSON projection is downstream visibility, never reason to fail the
+    actual apply.
+    """
+    try:
+        from applypilot.sync.entity_exporter import export_opportunity
+        conn = get_connection()
+        row = conn.execute("SELECT * FROM jobs WHERE url = ?", (url,)).fetchone()
+        if row is None:
+            return
+        export_opportunity(dict(row))
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning("Opportunity export failed for %s: %s", url, exc)
+
+
 def mark_result(url: str, status: str, error: str | None = None,
                 permanent: bool = False, duration_ms: int | None = None,
                 task_id: str | None = None) -> None:
@@ -204,6 +222,7 @@ def mark_result(url: str, status: str, error: str | None = None,
             WHERE url = ?
         """, (status, error or "unknown", duration_ms, task_id, url))
     conn.commit()
+    _sync_opportunity_for_url(url)
 
 
 def release_lock(url: str) -> None:
@@ -280,6 +299,7 @@ def mark_job(url: str, status: str, reason: str | None = None) -> None:
             WHERE url = ?
         """, (reason or "manual", url))
     conn.commit()
+    _sync_opportunity_for_url(url)
 
 
 def reset_failed() -> int:

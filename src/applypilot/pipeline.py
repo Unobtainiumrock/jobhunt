@@ -112,11 +112,28 @@ def _run_enrich(workers: int = 1) -> dict:
         return {"status": f"error: {e}"}
 
 
+def _sync_entities_after_stage(stage: str, min_fit_score: int = 0) -> None:
+    """Best-effort Opportunity JSON projection after a stage finishes.
+
+    Non-blocking — failures (missing linkedin-leads dir, schema drift, etc.)
+    log and continue. Entities export is a downstream convenience; never
+    reason to fail a pipeline stage on it.
+    """
+    try:
+        from applypilot.sync.entity_exporter import sync_from_db
+        result = sync_from_db(min_fit_score=min_fit_score)
+        log.info("Entities sync after %s: %d written, %d errors",
+                 stage, result["written"], result["errors"])
+    except Exception as exc:  # pragma: no cover — defensive
+        log.warning("Entities sync after %s failed: %s", stage, exc)
+
+
 def _run_score() -> dict:
     """Stage: LLM scoring — assign fit scores 1-10."""
     try:
         from applypilot.scoring.scorer import run_scoring
         run_scoring()
+        _sync_entities_after_stage("score", min_fit_score=0)
         return {"status": "ok"}
     except Exception as e:
         log.error("Scoring failed: %s", e)
@@ -128,6 +145,7 @@ def _run_tailor(min_score: int = 7, validation_mode: str = "normal") -> dict:
     try:
         from applypilot.scoring.tailor import run_tailoring
         run_tailoring(min_score=min_score, validation_mode=validation_mode)
+        _sync_entities_after_stage("tailor", min_fit_score=min_score)
         return {"status": "ok"}
     except Exception as e:
         log.error("Tailoring failed: %s", e)
