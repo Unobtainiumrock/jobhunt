@@ -23,7 +23,7 @@ def push_now() -> dict:
     stage can ever fail because of a remote-sync issue.
     """
     try:
-        from applypilot.config import DB_PATH
+        from applypilot.config import DB_PATH, TAILORED_DIR, COVER_LETTER_DIR
         from applypilot.sync.entity_exporter import entities_dir
         from jobhunt_core.sync_remote import push_checkpoint
     except Exception as exc:  # pragma: no cover — defensive
@@ -34,6 +34,8 @@ def push_now() -> dict:
         result = push_checkpoint(
             db_path=DB_PATH,
             entities_dir=entities_dir(),
+            tailored_dir=TAILORED_DIR,
+            cover_dir=COVER_LETTER_DIR,
         )
         if not result.get("skipped"):
             log.info("remote-sync: %s", result)
