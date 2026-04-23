@@ -75,9 +75,19 @@ def _make_mcp_config(cdp_port: int) -> dict:
                     f"--viewport-size={config.DEFAULTS['viewport']}",
                 ],
             },
+            # Gmail MCP — invoked from a locally-built fork of
+            # ArtyMcLabin/Gmail-MCP-Server (maintained hardened fork of the
+            # archived upstream GongRzhe/Gmail-MCP-Server). Using a local
+            # build instead of `npx` removes the supply-chain surface of
+            # auto-installing the npm package at every run. The scope the
+            # server will operate under is pinned into the saved credentials
+            # at `node dist/index.js auth --scopes=gmail.readonly` time, so
+            # it does not need to be re-passed here.
             "gmail": {
-                "command": "npx",
-                "args": ["-y", "@gongrzhe/server-gmail-autoauth-mcp"],
+                "command": "node",
+                "args": [
+                    str(Path.home() / "Desktop/github/Gmail-MCP-Server/dist/index.js"),
+                ],
             },
         }
     }
@@ -329,15 +339,38 @@ def run_job(job: dict, port: int, worker_id: int = 0,
         "--mcp-config", str(mcp_config_path),
         "--permission-mode", "bypassPermissions",
         "--no-session-persistence",
+        # Principle-of-least-privilege: block every gmail tool except the
+        # two applypilot actually needs (search_emails + read_email for
+        # pulling sign-up verification codes). The `gmail.readonly` OAuth
+        # scope already prevents write operations server-side; this list is
+        # a defense-in-depth layer at the MCP boundary so prompt injection
+        # cannot attempt sends, deletes, filter creation, or thread/inbox
+        # enumeration beyond the narrow case of reading a verification
+        # email the agent already knows the subject of.
         "--disallowedTools", (
-            "mcp__gmail__draft_email,mcp__gmail__modify_email,"
-            "mcp__gmail__delete_email,mcp__gmail__download_attachment,"
-            "mcp__gmail__batch_modify_emails,mcp__gmail__batch_delete_emails,"
-            "mcp__gmail__create_label,mcp__gmail__update_label,"
-            "mcp__gmail__delete_label,mcp__gmail__get_or_create_label,"
-            "mcp__gmail__list_email_labels,mcp__gmail__create_filter,"
-            "mcp__gmail__list_filters,mcp__gmail__get_filter,"
-            "mcp__gmail__delete_filter"
+            "mcp__gmail__batch_delete_emails,"
+            "mcp__gmail__batch_modify_emails,"
+            "mcp__gmail__create_filter,"
+            "mcp__gmail__create_filter_from_template,"
+            "mcp__gmail__create_label,"
+            "mcp__gmail__delete_email,"
+            "mcp__gmail__delete_filter,"
+            "mcp__gmail__delete_label,"
+            "mcp__gmail__download_attachment,"
+            "mcp__gmail__download_email,"
+            "mcp__gmail__draft_email,"
+            "mcp__gmail__get_filter,"
+            "mcp__gmail__get_inbox_with_threads,"
+            "mcp__gmail__get_or_create_label,"
+            "mcp__gmail__get_thread,"
+            "mcp__gmail__list_email_labels,"
+            "mcp__gmail__list_filters,"
+            "mcp__gmail__list_inbox_threads,"
+            "mcp__gmail__modify_email,"
+            "mcp__gmail__modify_thread,"
+            "mcp__gmail__reply_all,"
+            "mcp__gmail__send_email,"
+            "mcp__gmail__update_label"
         ),
         "--output-format", "stream-json",
         "--verbose", "-",
