@@ -69,6 +69,10 @@ services:
       - "127.0.0.1:3457:3457"
     volumes:
       - app-data:/app/data
+      # JH-PH8 prep: expose the BAP jobhunt.db + entities read-only so the
+      # review UI can surface applications alongside recruiter replies
+      # without needing to round-trip through the pipeline container.
+      - /opt/jobhunt/data:/jobhunt:ro
     environment:
       - REVIEW_HOST=0.0.0.0
       - QDRANT_URL=http://qdrant:6333
