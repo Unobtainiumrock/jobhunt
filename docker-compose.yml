@@ -134,6 +134,42 @@ services:
       - HEALTH_GMAIL_PROBE_INTERVAL=${HEALTH_GMAIL_PROBE_INTERVAL:-900}
     restart: unless-stopped
 
+  # BAP pipeline (discover/enrich/score/tailor/cover/pdf). Sits under the
+  # `ondemand` profile so `docker compose up` doesn't bring it up — the
+  # host cron invokes it with `docker compose --profile ondemand run
+  # --rm pipeline <cmd>` which exits after each stage, releasing the ~500-
+  # 900 MB peak memory a chromium-using stage requires. The box has 3.7 GB
+  # RAM and linkedin-leads already holds 1.3 GB; we cannot afford a
+  # perpetually-resident Python container here.
+  #
+  # Source is bind-mounted (not COPYed into the image) so pulling new
+  # commits on the host surfaces immediately on the next run — no image
+  # rebuild needed for day-to-day iteration.
+  pipeline:
+    build:
+      context: /opt/BetterApplyPilot
+      dockerfile: infra/Dockerfile.pipeline
+    image: jobhunt-pipeline:latest
+    mem_limit: 1g
+    profiles: ["ondemand"]
+    volumes:
+      - /opt/BetterApplyPilot:/app
+      - /opt/jobhunt-core:/opt/jobhunt-core
+      - /opt/jobhunt/data:/data
+      - /opt/linkedin-leads/profile:/opt/linkedin-leads/profile:ro
+    environment:
+      - APPLYPILOT_DIR=/data
+      - APPLYPILOT_BACKEND=hetzner
+      - JOBHUNT_PROFILE_YAML=/opt/linkedin-leads/profile/user_profile.yaml
+      # Auto-sync is disabled server-side: this container IS the writer
+      # in Mode B. Setting JOBHUNT_REMOTE_SSH_HOST empty explicitly
+      # overrides anything leaking in from a host .env.
+      - JOBHUNT_REMOTE_SSH_HOST=
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-gemini-2.5-flash}
+
 volumes:
   qdrant-storage:
   chrome-profile:
