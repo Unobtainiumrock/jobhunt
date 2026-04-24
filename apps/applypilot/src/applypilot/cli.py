@@ -182,6 +182,12 @@ def apply(
         help="Max cumulative USD the worker may spend across this batch. "
              "Stops cleanly with 'budget_exhausted' when crossed. 0 = unlimited.",
     ),
+    cooldown_hours: float = typer.Option(
+        1.0, "--cooldown-hours",
+        help="Skip rows whose last_attempted_at is within this many hours. "
+             "Prevents back-to-back retries of the same failing row. "
+             "Bypassed when --url is used (explicit intent). 0 = no cooldown.",
+    ),
 ) -> None:
     """Launch auto-apply to submit job applications."""
     _bootstrap()
@@ -286,6 +292,7 @@ def apply(
         workers=workers,
         budget_per_job=budget_per_job,
         budget_total=budget_total,
+        cooldown_hours=cooldown_hours,
     )
 
 

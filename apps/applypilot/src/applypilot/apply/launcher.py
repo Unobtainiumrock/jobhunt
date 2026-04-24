@@ -17,7 +17,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from rich.console import Console
@@ -105,13 +105,19 @@ def _make_mcp_config(cdp_port: int) -> dict:
 # ---------------------------------------------------------------------------
 
 def acquire_job(target_url: str | None = None, min_score: int = 7,
-                worker_id: int = 0) -> dict | None:
+                worker_id: int = 0, cooldown_hours: float = 1.0) -> dict | None:
     """Atomically acquire the next job to apply to.
 
     Args:
         target_url: Apply to a specific URL instead of picking from queue.
+            When set, cooldown is bypassed (user explicit intent).
         min_score: Minimum fit_score threshold.
         worker_id: Worker claiming this job (for tracking).
+        cooldown_hours: Skip rows whose ``last_attempted_at`` is within
+            this window. Prevents the scheduler re-picking the same
+            failing row back-to-back (observed 2026-04-24: 2 consecutive
+            TR Senior Research Engineer retries both hit turn-budget).
+            0 = no cooldown.
 
     Returns:
         Job dict or None if the queue is empty.
@@ -159,6 +165,21 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
             # user's authorized list). NULL geo_fit passes through — a row
             # discovered before the classifier ran should still be pickable;
             # the scorer/enrichment pipeline will populate it on next pass.
+            # Cooldown filter: skip any row whose last_attempted_at is
+            # within cooldown_hours of now. Prevents back-to-back retries
+            # on the same failing row (bad ROI — if the first attempt hit
+            # a structural wall like a long-form turn-budget, the second
+            # attempt likely hits the same wall). 0 disables cooldown.
+            cooldown_clause = ""
+            if cooldown_hours and cooldown_hours > 0:
+                cutoff = (
+                    datetime.now(timezone.utc)
+                    - timedelta(hours=cooldown_hours)
+                ).isoformat()
+                cooldown_clause = (
+                    "AND (last_attempted_at IS NULL OR last_attempted_at < ?)"
+                )
+                params.append(cutoff)
             row = conn.execute(f"""
                 SELECT url, title, site, application_url, tailored_resume_path,
                        fit_score, location, full_description, cover_letter_path
@@ -176,6 +197,7 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
                   )
                   {site_clause}
                   {url_clauses}
+                  {cooldown_clause}
                 ORDER BY fit_score DESC, url
                 LIMIT 1
             """, [config.DEFAULTS["max_apply_attempts"]] + params).fetchone()
@@ -691,7 +713,8 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
                 min_score: int = 7, headless: bool = False,
                 model: str = "sonnet", dry_run: bool = False,
                 budget_per_job: float = 0.0,
-                budget_total: float = 0.0) -> tuple[int, int]:
+                budget_total: float = 0.0,
+                cooldown_hours: float = 1.0) -> tuple[int, int]:
     """Run jobs sequentially until limit is reached or queue is empty.
 
     Args:
@@ -739,7 +762,8 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
                      last_action="waiting for job", actions=0)
 
         job = acquire_job(target_url=target_url, min_score=min_score,
-                          worker_id=worker_id)
+                          worker_id=worker_id,
+                          cooldown_hours=(0 if target_url else cooldown_hours))
         if not job:
             if not continuous:
                 add_event(f"[W{worker_id}] Queue empty")
@@ -820,7 +844,8 @@ def main(limit: int = 1, target_url: str | None = None,
          dry_run: bool = False, continuous: bool = False,
          poll_interval: int = 60, workers: int = 1,
          budget_per_job: float = 0.0,
-         budget_total: float = 0.0) -> None:
+         budget_total: float = 0.0,
+         cooldown_hours: float = 1.0) -> None:
     """Launch the apply pipeline.
 
     Args:
@@ -912,6 +937,7 @@ def main(limit: int = 1, target_url: str | None = None,
                     dry_run=dry_run,
                     budget_per_job=budget_per_job,
                     budget_total=budget_total,
+                    cooldown_hours=cooldown_hours,
                 )
             else:
                 # Multi-worker — distribute limit across workers
@@ -937,6 +963,7 @@ def main(limit: int = 1, target_url: str | None = None,
                             dry_run=dry_run,
                             budget_per_job=budget_per_job,
                             budget_total=budget_total,
+                            cooldown_hours=cooldown_hours,
                         ): i
                         for i in range(workers)
                     }
