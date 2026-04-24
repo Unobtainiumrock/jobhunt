@@ -455,6 +455,18 @@ def tailor_resume(
         return tailored, report
 
     report["status"] = "exhausted_retries"
+    # Diagnostic: surface the reasons the validator / judge kept rejecting so
+    # operators can see what the model is actually producing that fails. The
+    # full per-attempt reasons live in avoid_notes; we log the last one since
+    # it's the most recent failure and the earlier ones are usually
+    # superseded.
+    if avoid_notes:
+        log.warning(
+            "tailor EXHAUSTED after %d attempts for %r — last validator/judge "
+            "notes: %s",
+            report["attempts"], job.get("title", "?"),
+            " | ".join(avoid_notes[-3:]),
+        )
     return tailored, report
 
 

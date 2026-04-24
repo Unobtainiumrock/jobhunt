@@ -137,6 +137,12 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
             if blocked_patterns:
                 url_clauses = " ".join(f"AND url NOT LIKE ?" for _ in blocked_patterns)
                 params.extend(blocked_patterns)
+            # Fix 1 (opportunity-level apply dedup): if ANY other row with
+            # the same (site, title) has already been applied, skip this row
+            # too. Prevents submitting to the same real position via
+            # different URLs (e.g. LinkedIn listing vs. company Workday
+            # portal — both map to the same opportunity ID via the stable
+            # hash in jobhunt_core, but they are separate rows in jobs).
             row = conn.execute(f"""
                 SELECT url, title, site, application_url, tailored_resume_path,
                        fit_score, location, full_description, cover_letter_path
@@ -145,6 +151,12 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
                   AND (apply_status IS NULL OR apply_status = 'failed')
                   AND (apply_attempts IS NULL OR apply_attempts < ?)
                   AND fit_score >= ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM jobs dupe
+                      WHERE dupe.site  = jobs.site
+                        AND dupe.title = jobs.title
+                        AND dupe.applied_at IS NOT NULL
+                  )
                   {site_clause}
                   {url_clauses}
                 ORDER BY fit_score DESC, url

@@ -61,42 +61,50 @@ _UPSTREAM: dict[str, str | None] = {
 # Individual stage runners
 # ---------------------------------------------------------------------------
 
-def _run_discover(workers: int = 1) -> dict:
-    """Stage: Job discovery — JobSpy, Workday, and smart-extract scrapers."""
+def _run_discover(workers: int = 1, skip_recent_hours: float = 0) -> dict:
+    """Stage: Job discovery — JobSpy, Workday, and smart-extract scrapers.
+
+    If ``skip_recent_hours`` > 0, each scraper consults the ``source_runs``
+    table and skips the HTTP work if it ran within that window. Useful for
+    back-to-back ``applypilot run`` invocations where re-hitting every
+    board immediately would waste network and rate-limit budget.
+    """
+    from applypilot.database import (
+        get_connection, record_source_run, should_skip_source,
+    )
+
     stats: dict = {"jobspy": None, "workday": None, "smartextract": None}
+    conn = get_connection()
 
-    # JobSpy
-    console.print("  [cyan]JobSpy full crawl...[/cyan]")
-    try:
-        from applypilot.discovery.jobspy import run_discovery
-        run_discovery()
-        stats["jobspy"] = "ok"
-    except Exception as e:
-        log.error("JobSpy crawl failed: %s", e)
-        console.print(f"  [red]JobSpy error:[/red] {e}")
-        stats["jobspy"] = f"error: {e}"
+    def _run(source: str, label: str, fn):
+        if should_skip_source(source, skip_recent_hours, conn=conn):
+            console.print(
+                f"  [yellow]{label}: skipped (ran within "
+                f"{skip_recent_hours:g}h window)[/yellow]"
+            )
+            stats[source] = "skipped (recent)"
+            return
+        console.print(f"  [cyan]{label}...[/cyan]")
+        try:
+            jobs_before = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+            fn()
+            jobs_after = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+            record_source_run(source, jobs_found=jobs_after, jobs_new=jobs_after - jobs_before, conn=conn)
+            stats[source] = "ok"
+        except Exception as e:
+            log.error("%s failed: %s", label, e)
+            console.print(f"  [red]{label} error:[/red] {e}")
+            stats[source] = f"error: {e}"
+            record_source_run(source, jobs_found=0, jobs_new=0, error=str(e)[:200], conn=conn)
 
-    # Workday corporate scraper
-    console.print("  [cyan]Workday corporate scraper...[/cyan]")
-    try:
-        from applypilot.discovery.workday import run_workday_discovery
-        run_workday_discovery(workers=workers)
-        stats["workday"] = "ok"
-    except Exception as e:
-        log.error("Workday scraper failed: %s", e)
-        console.print(f"  [red]Workday error:[/red] {e}")
-        stats["workday"] = f"error: {e}"
+    from applypilot.discovery.jobspy import run_discovery
+    _run("jobspy", "JobSpy full crawl", run_discovery)
 
-    # Smart extract
-    console.print("  [cyan]Smart extract (AI-powered scraping)...[/cyan]")
-    try:
-        from applypilot.discovery.smartextract import run_smart_extract
-        run_smart_extract(workers=workers)
-        stats["smartextract"] = "ok"
-    except Exception as e:
-        log.error("Smart extract failed: %s", e)
-        console.print(f"  [red]Smart extract error:[/red] {e}")
-        stats["smartextract"] = f"error: {e}"
+    from applypilot.discovery.workday import run_workday_discovery
+    _run("workday", "Workday corporate scraper", lambda: run_workday_discovery(workers=workers))
+
+    from applypilot.discovery.smartextract import run_smart_extract
+    _run("smartextract", "Smart extract (AI-powered scraping)", lambda: run_smart_extract(workers=workers))
 
     _push_remote_after_stage("discover")
     return stats
@@ -380,7 +388,8 @@ def _run_stage_streaming(
 
 def _run_sequential(ordered: list[str], min_score: int, workers: int = 1,
                     validation_mode: str = "normal",
-                    cleanup_dry_run: bool = False) -> dict:
+                    cleanup_dry_run: bool = False,
+                    skip_recent_hours: float = 0) -> dict:
     """Execute stages one at a time (original behavior)."""
     results: list[dict] = []
     errors: dict[str, str] = {}
@@ -403,6 +412,8 @@ def _run_sequential(ordered: list[str], min_score: int, workers: int = 1,
                 kwargs["validation_mode"] = validation_mode
             if name in ("discover", "enrich"):
                 kwargs["workers"] = workers
+            if name == "discover" and skip_recent_hours:
+                kwargs["skip_recent_hours"] = skip_recent_hours
             if name == "cleanup":
                 kwargs["cleanup_dry_run"] = cleanup_dry_run
             result = runner(**kwargs)
@@ -508,6 +519,7 @@ def run_pipeline(
     workers: int = 1,
     validation_mode: str = "normal",
     cleanup_dry_run: bool = False,
+    skip_recent_hours: float = 0,
 ) -> dict:
     """Run pipeline stages.
 
@@ -565,7 +577,8 @@ def run_pipeline(
     else:
         result = _run_sequential(ordered, min_score, workers=workers,
                                  validation_mode=validation_mode,
-                                 cleanup_dry_run=cleanup_dry_run)
+                                 cleanup_dry_run=cleanup_dry_run,
+                                 skip_recent_hours=skip_recent_hours)
 
     # Summary table
     console.print(f"\n{'=' * 70}")

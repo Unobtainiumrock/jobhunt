@@ -14,7 +14,9 @@ from applypilot.config import DB_PATH
 from jobhunt_core.store.jobs import (
     JOBS_COLUMN_REGISTRY,
     create_jobs_table,
+    create_source_runs_table,
     ensure_jobs_columns,
+    ensure_source_runs_columns,
 )
 
 # Thread-local connection storage — each thread gets its own connection
@@ -84,7 +86,69 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
     conn = get_connection(path)
     create_jobs_table(conn)
     ensure_jobs_columns(conn)
+    create_source_runs_table(conn)
+    ensure_source_runs_columns(conn)
     return conn
+
+
+# ---------------------------------------------------------------------------
+# source_runs read/write helpers — consumed by the discover stage
+# ---------------------------------------------------------------------------
+
+def get_source_last_run(source: str, conn: sqlite3.Connection | None = None) -> datetime | None:
+    """Return the UTC datetime of the last successful run for ``source``.
+
+    Returns ``None`` if the source has never run (or the row is missing a
+    timestamp, which shouldn't happen but we guard anyway).
+    """
+    if conn is None:
+        conn = get_connection()
+    row = conn.execute(
+        "SELECT last_ran_at FROM source_runs WHERE source = ?", (source,),
+    ).fetchone()
+    if row is None or row[0] is None:
+        return None
+    try:
+        return datetime.fromisoformat(row[0].replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+
+
+def should_skip_source(source: str, window_hours: float,
+                       conn: sqlite3.Connection | None = None) -> bool:
+    """Return True iff ``source`` ran within the last ``window_hours``.
+
+    ``window_hours`` == 0 disables skipping (always returns False). Callers
+    should check this before paying the scraper's HTTP cost.
+    """
+    if not window_hours or window_hours <= 0:
+        return False
+    last = get_source_last_run(source, conn=conn)
+    if last is None:
+        return False
+    age_sec = (datetime.now(timezone.utc) - last).total_seconds()
+    return age_sec < (window_hours * 3600)
+
+
+def record_source_run(source: str, jobs_found: int, jobs_new: int,
+                      error: str | None = None,
+                      conn: sqlite3.Connection | None = None) -> None:
+    """Stamp ``source_runs`` with the outcome of a discover-stage run."""
+    if conn is None:
+        conn = get_connection()
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT INTO source_runs (source, last_ran_at, last_jobs_found, "
+        "                         last_jobs_new, last_error) "
+        "VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT(source) DO UPDATE SET "
+        "    last_ran_at = excluded.last_ran_at, "
+        "    last_jobs_found = excluded.last_jobs_found, "
+        "    last_jobs_new = excluded.last_jobs_new, "
+        "    last_error = excluded.last_error",
+        (source, now, jobs_found, jobs_new, error),
+    )
+    conn.commit()
 
 
 def ensure_columns(conn: sqlite3.Connection | None = None) -> list[str]:

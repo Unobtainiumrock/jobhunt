@@ -90,6 +90,47 @@ def create_jobs_table(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+# ---------------------------------------------------------------------------
+# source_runs table — "when did we last scrape source X?" tracking so the
+# discover stage can skip sources that ran within a recent-enough window.
+# ---------------------------------------------------------------------------
+
+SOURCE_RUNS_COLUMN_REGISTRY: dict[str, str] = {
+    "source": "TEXT PRIMARY KEY",     # e.g. "jobspy", "workday", "smartextract"
+    "last_ran_at": "TEXT",            # ISO 8601 UTC
+    "last_jobs_found": "INTEGER",     # total rows the scraper saw
+    "last_jobs_new": "INTEGER",       # rows inserted (rest = dupes by URL)
+    "last_error": "TEXT",             # last error message if run failed
+}
+
+
+def create_source_runs_table(conn: sqlite3.Connection) -> None:
+    """Create the source_runs table if it doesn't exist. Commits."""
+    cols_sql = ",\n            ".join(
+        f"{name} {dtype}" for name, dtype in SOURCE_RUNS_COLUMN_REGISTRY.items()
+    )
+    conn.execute(f"""
+        CREATE TABLE IF NOT EXISTS source_runs (
+            {cols_sql}
+        )
+    """)
+    conn.commit()
+
+
+def ensure_source_runs_columns(conn: sqlite3.Connection) -> list[str]:
+    """Forward-migrate source_runs. Returns list of columns added."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(source_runs)").fetchall()}
+    added: list[str] = []
+    for col, dtype in SOURCE_RUNS_COLUMN_REGISTRY.items():
+        if col in existing or "PRIMARY KEY" in dtype:
+            continue
+        conn.execute(f"ALTER TABLE source_runs ADD COLUMN {col} {dtype}")
+        added.append(col)
+    if added:
+        conn.commit()
+    return added
+
+
 def ensure_jobs_columns(conn: sqlite3.Connection) -> list[str]:
     """Add any missing columns to the jobs table (forward migration).
 

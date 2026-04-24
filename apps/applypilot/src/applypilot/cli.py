@@ -91,6 +91,15 @@ def run(
         False, "--cleanup-dry-run",
         help="Run the cleanup stage in dry-run mode — logs what would be deleted without touching disk or DB.",
     ),
+    skip_recent: float = typer.Option(
+        0.0, "--skip-recent",
+        help=(
+            "Discover: skip any source (jobspy / workday / smartextract) that "
+            "ran within the last N hours. 0 = always run (default). Use e.g. "
+            "4 for back-to-back runs where re-hitting every board immediately "
+            "would waste network and rate-limit budget."
+        ),
+    ),
     validation: str = typer.Option(
         "normal",
         "--validation",
@@ -141,6 +150,7 @@ def run(
         workers=workers,
         validation_mode=validation,
         cleanup_dry_run=cleanup_dry_run,
+        skip_recent_hours=skip_recent,
     )
 
     if result.get("errors"):

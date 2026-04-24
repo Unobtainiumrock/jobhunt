@@ -13,8 +13,11 @@ from jobhunt_core.store.opportunity import (
 )
 from jobhunt_core.store.jobs import (
     JOBS_COLUMN_REGISTRY,
+    SOURCE_RUNS_COLUMN_REGISTRY,
     create_jobs_table,
+    create_source_runs_table,
     ensure_jobs_columns,
+    ensure_source_runs_columns,
 )
 
 __all__ = [
@@ -25,4 +28,8 @@ __all__ = [
     "JOBS_COLUMN_REGISTRY",
     "create_jobs_table",
     "ensure_jobs_columns",
+    # Source-run tracking (skip-recent discover)
+    "SOURCE_RUNS_COLUMN_REGISTRY",
+    "create_source_runs_table",
+    "ensure_source_runs_columns",
 ]
