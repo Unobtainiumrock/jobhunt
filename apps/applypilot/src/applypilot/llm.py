@@ -3,7 +3,7 @@ Unified LLM client for ApplyPilot.
 
 Auto-detects provider from environment:
   ANTHROPIC_API_KEY -> Anthropic Claude (default: claude-sonnet-4-6)
-  GEMINI_API_KEY    -> Google Gemini (default: gemini-2.5-flash)
+  GEMINI_API_KEY    -> Google Gemini (default: gemini-3.1-flash-lite-preview)
   OPENAI_API_KEY    -> OpenAI (default: gpt-4o-mini)
   LLM_URL           -> Local llama.cpp / Ollama compatible endpoint
 
@@ -61,7 +61,7 @@ def _detect_provider() -> tuple[str, str, str]:
     if gemini_key and not local_url:
         return (
             _GEMINI_COMPAT_BASE,
-            model_override or "gemini-2.5-flash",
+            model_override or "gemini-3.1-flash-lite-preview",
             gemini_key,
         )
 
@@ -356,7 +356,7 @@ class LLMClient:
                         f"Native: {native_exc.response.status_code} — "
                         f"{native_exc.response.text[:200]}. "
                         f"Model '{self.model}' may be retired; try "
-                        f"LLM_MODEL=gemini-2.5-flash in ~/.applypilot/.env."
+                        f"LLM_MODEL=gemini-3.1-flash-lite-preview in ~/.applypilot/.env."
                     ) from native_exc
 
             except httpx.HTTPStatusError as exc:
