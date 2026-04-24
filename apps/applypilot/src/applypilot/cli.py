@@ -318,10 +318,12 @@ def drainer(
     SIGINT / SIGTERM.
 
     Requires:
-      - ``APPLYPILOT_BACKEND=hetzner`` recommended in the laptop ``.env``
-        (otherwise Phase-5 auto-sync will fight this drainer for writes).
+      - ``APPLYPILOT_BACKEND=remote`` recommended in the laptop ``.env``
+        (otherwise auto-sync will fight this drainer for writes).
+      - ``JOBHUNT_REMOTE_SSH_HOST`` set to your SSH alias for the server
+        (no hardcoded default — the drainer refuses to start without it).
       - ``~/.claude/`` authenticated with Claude Code CLI.
-      - ``hetzner`` SSH alias configured with key-based auth.
+      - That SSH alias resolves via ``~/.ssh/config`` with key-based auth.
     """
     _bootstrap()
     from applypilot.drainer import DrainerConfig, run_forever

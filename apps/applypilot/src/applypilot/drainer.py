@@ -1,10 +1,9 @@
 """Laptop apply-drainer for Mode B (server-authoritative pipeline).
 
-Phase 7 of the job-hunt unification plan. When ``APPLYPILOT_BACKEND=hetzner``
-the server owns discover → pdf; apply still has to run on the laptop
-because it needs Claude Code CLI + ATS-form Chrome that can't fit in
-the Hetzner 3.7 GB VM alongside linkedin-leads. This module bridges
-that split.
+When ``APPLYPILOT_BACKEND=remote`` the server owns discover → pdf;
+apply still has to run on the laptop because it needs Claude Code CLI
+and an ATS-form Chrome that can't fit in a small (4 GB-class) remote
+VM alongside the linkedin-leads stack. This module bridges that split.
 
 Loop:
   1. Atomic claim — SSH a ``UPDATE ... RETURNING`` against the server
@@ -47,7 +46,11 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 
-DEFAULT_REMOTE_HOST = "hetzner"
+# No hardcoded SSH alias — every deploy has its own. Drainer requires
+# JOBHUNT_REMOTE_SSH_HOST to be set explicitly. The alias should resolve
+# via ~/.ssh/config with key-based auth and a route to the server that
+# hosts /opt/jobhunt/data.
+DEFAULT_REMOTE_HOST = ""
 DEFAULT_REMOTE_DATA_DIR = "/opt/jobhunt/data"
 DEFAULT_POLL_INTERVAL_SEC = 60
 DEFAULT_PER_HOUR_CAP = 20
@@ -338,6 +341,13 @@ def _install_signal_handlers() -> list[int]:
 def run_forever(cfg: DrainerConfig | None = None) -> None:
     """Main drainer loop. Blocks until SIGINT / SIGTERM."""
     cfg = cfg or DrainerConfig.from_env()
+    if not cfg.remote_host:
+        raise RuntimeError(
+            "drainer: JOBHUNT_REMOTE_SSH_HOST is not set. Export it (e.g. "
+            "`export JOBHUNT_REMOTE_SSH_HOST=my-server`) so the drainer knows "
+            "which SSH alias to poll. The alias must resolve via ~/.ssh/config "
+            "with key-based auth."
+        )
     stats = DrainerStats()
     stop_flag = _install_signal_handlers()
     log.info("drainer: starting, cfg=%s", cfg)

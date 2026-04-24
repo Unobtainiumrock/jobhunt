@@ -163,7 +163,7 @@ services:
       - ./profile:/opt/linkedin-leads/profile:ro
     environment:
       - APPLYPILOT_DIR=/data
-      - APPLYPILOT_BACKEND=hetzner
+      - APPLYPILOT_BACKEND=remote
       - JOBHUNT_PROFILE_YAML=/opt/linkedin-leads/profile/user_profile.yaml
       # Auto-sync is disabled server-side: this container IS the writer
       # in Mode B. Setting JOBHUNT_REMOTE_SSH_HOST empty explicitly

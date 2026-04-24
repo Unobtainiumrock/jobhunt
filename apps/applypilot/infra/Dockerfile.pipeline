@@ -41,10 +41,11 @@ RUN pip install \
 
 WORKDIR /app
 
-# Everything the pipeline needs is bind-mounted at runtime:
-#   /opt/BetterApplyPilot  -> /app
-#   /opt/jobhunt-core      -> /opt/jobhunt-core
-#   /opt/jobhunt/data      -> /data  (the authoritative SQLite + entities)
+# Everything the pipeline needs is bind-mounted at runtime (paths relative
+# to the docker-compose.yml in apps/linkedin-leads/):
+#   ../applypilot                  -> /app
+#   ../../packages/jobhunt_core    -> /opt/jobhunt-core
+#   /opt/jobhunt/data              -> /data  (authoritative SQLite + entities)
 # Entrypoint wires these via pip install -e each, then execs the command.
 COPY infra/pipeline-entrypoint.sh /usr/local/bin/pipeline-entrypoint
 RUN chmod +x /usr/local/bin/pipeline-entrypoint

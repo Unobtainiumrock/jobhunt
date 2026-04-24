@@ -57,15 +57,20 @@ def push_checkpoint(
         ``tailored`` / ``cover`` each map to ``"ok"`` or
         ``"error: <reason>"``.
     """
-    # Split-brain guard: when APPLYPILOT_BACKEND=hetzner the server IS
+    # Split-brain guard: when APPLYPILOT_BACKEND=remote the server IS
     # the authoritative writer and a laptop-initiated push would create
     # divergence. Skip without erroring so the caller's stage-complete
     # hook remains a safe no-op.
+    #
+    # "hetzner" is still accepted as an alias for backward compatibility
+    # with earlier deploys that used the hosting provider name as the
+    # token — same semantics, either value activates server-authoritative
+    # mode.
     backend = os.environ.get("APPLYPILOT_BACKEND", "laptop").strip().lower()
-    if backend == "hetzner":
+    if backend in {"remote", "hetzner"}:
         return {
             "skipped": True,
-            "reason": "APPLYPILOT_BACKEND=hetzner; server is authoritative",
+            "reason": f"APPLYPILOT_BACKEND={backend}; server is authoritative",
         }
 
     host = remote_host or os.environ.get("JOBHUNT_REMOTE_SSH_HOST", "").strip()
