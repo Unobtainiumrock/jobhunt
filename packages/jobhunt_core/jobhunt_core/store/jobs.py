@@ -74,6 +74,10 @@ JOBS_COLUMN_REGISTRY: dict[str, str] = {
     "apply_duration_ms": "INTEGER",
     "apply_task_id": "TEXT",
     "verification_confidence": "TEXT",
+    # Resumable-apply progress. Comma-separated list of stage markers the
+    # agent has emitted via ``PROGRESS: stage=<name>`` lines. On retry,
+    # the prompt builder reads this and tells the agent to skip ahead.
+    "apply_progress": "TEXT",
 }
 
 

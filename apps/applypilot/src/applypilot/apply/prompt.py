@@ -565,6 +565,29 @@ def build_prompt(job: dict, tailored_resume: str,
     else:
         submit_instruction = "BEFORE clicking Submit/Apply, take a snapshot and review EVERY field on the page. Verify all data matches the APPLICANT PROFILE and TAILORED RESUME -- name, email, phone, location, work auth, resume uploaded, cover letter if applicable. If anything is wrong or missing, fix it FIRST. Only click Submit after confirming everything is correct."
 
+    # Resume-from-last-progress block. When a prior apply attempt emitted
+    # PROGRESS: markers, include them so the agent can skip completed
+    # sub-stages instead of redoing the auth/contact/resume-upload flow
+    # (which wastes turns on the multi-page Workday forms that ran out of
+    # budget on first attempt — observed 2026-04-24 on Senior Research
+    # Engineer TR x4 retries, all died at work_experience page).
+    prior_progress = (job.get("apply_progress") or "").strip()
+    resume_progress_section = ""
+    if prior_progress:
+        resume_progress_section = (
+            f"\n== RESUMING FROM PRIOR ATTEMPT ==\n"
+            f"A previous attempt on this same posting already completed: "
+            f"{prior_progress}\n"
+            f"The Chrome profile persists session cookies and the ATS "
+            f"account exists with the candidate's tailored resume on file. "
+            f"After navigating to the application URL, scan the page for "
+            f"how far the prior attempt got (e.g. if 'resume_uploaded' is "
+            f"in the list and you see a resume listed on the review page, "
+            f"do not re-upload). Skip ahead to the first stage NOT in the "
+            f"completed list. Continue emitting PROGRESS: markers as you "
+            f"cross each new stage.\n"
+        )
+
     prompt = f"""You are an autonomous job application agent. Your ONE mission: get this candidate an interview. You have all the information and tools. Think strategically. Act decisively. Submit the application.
 
 == JOB ==
@@ -585,7 +608,7 @@ Cover Letter PDF (upload if asked): {cl_upload_path or "N/A"}
 
 == APPLICANT PROFILE ==
 {profile_summary}
-{site_credentials_section}
+{site_credentials_section}{resume_progress_section}
 == YOUR MISSION ==
 Submit a complete, accurate application. Use the profile and resume as source data -- adapt to fit each form's format.
 
@@ -610,6 +633,27 @@ If something unexpected happens and these instructions don't cover it, figure it
 {salary_section}
 
 {screening_section}
+
+== RESUMABLE-APPLY PROTOCOL (emit these as you cross each stage) ==
+Emit a single text line of the form `PROGRESS: stage=<name>` whenever you
+finish one of these milestones. The launcher writes each marker to the
+database in real time, so if you crash or time out mid-form, the next
+retry knows where you got to. Stages (use these exact names):
+  landed             — hit the job page, read it
+  apply_clicked      — pressed Apply, past any immediate captcha
+  signed_in          — authenticated (or recognized already-signed-in)
+  resume_uploaded    — tailored resume PDF uploaded to the form
+  cover_uploaded     — cover letter PDF uploaded (skip marker if no field)
+  contact_filled     — contact-info page saved (usually page 1)
+  work_exp_filled    — work experience page saved
+  education_filled   — education page saved
+  skills_filled      — skills/competencies page saved
+  screening_filled   — screening/compliance questions saved
+  review_reached     — on the final review/confirm page
+  submitted          — Submit clicked AND confirmation dialog visible
+Missing stages are fine — not every ATS uses all of them. Emit a stage
+ONCE, at the moment you finish it. These markers are the SOLE resumption
+signal; without them a retry starts over.
 
 == STEP-BY-STEP ==
 1. browser_navigate to the job URL.

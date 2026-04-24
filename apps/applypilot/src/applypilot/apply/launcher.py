@@ -535,6 +535,27 @@ def run_job(job: dict, port: int, worker_id: int = 0,
         proc.stdin.write(agent_prompt)
         proc.stdin.close()
 
+        # Regex for the resumable-apply progress protocol. The agent emits
+        # `PROGRESS: stage=<name>` lines as it crosses each milestone; we
+        # persist to jobs.apply_progress incrementally so a mid-flow crash
+        # still leaves a resumption point for the next retry.
+        progress_re = re.compile(r"PROGRESS:\s*stage=([A-Za-z0-9_]+)")
+        progress_markers: list[str] = []
+
+        def _persist_progress(marker: str) -> None:
+            if marker in progress_markers:
+                return
+            progress_markers.append(marker)
+            try:
+                pconn = get_connection()
+                pconn.execute(
+                    "UPDATE jobs SET apply_progress = ? WHERE url = ?",
+                    (",".join(progress_markers), job["url"]),
+                )
+                pconn.commit()
+            except Exception:
+                logger.debug("progress persist failed for %s", job["url"], exc_info=True)
+
         text_parts: list[str] = []
         with open(worker_log, "a", encoding="utf-8") as lf:
             lf.write(log_header)
@@ -552,6 +573,11 @@ def run_job(job: dict, port: int, worker_id: int = 0,
                             if bt == "text":
                                 text_parts.append(block["text"])
                                 lf.write(block["text"] + "\n")
+                                # Scan text block for PROGRESS markers and
+                                # persist each new stage. Multiple markers
+                                # may appear in a single block.
+                                for m in progress_re.finditer(block["text"]):
+                                    _persist_progress(m.group(1))
                             elif bt == "tool_use":
                                 name = (
                                     block.get("name", "")
