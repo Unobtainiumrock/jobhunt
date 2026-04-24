@@ -53,6 +53,13 @@ _stop_event = threading.Event()
 _claude_procs: dict[int, subprocess.Popen] = {}
 _claude_lock = threading.Lock()
 
+# Per-job wall-clock timeout. The agent subprocess is killed if it runs
+# longer than this. Default 20 min accommodates TR-scale multi-page Workday
+# forms (observed 11-20 min success cases) while still catching internet-
+# crash hangs (observed >20 min stuck on browser_wait_for). Override via
+# env var for debugging or for ATS portals known to be slower.
+APPLY_WATCHDOG_SEC = int(os.environ.get("APPLY_WATCHDOG_SEC", "1200"))
+
 # Register cleanup on exit
 atexit.register(cleanup_on_exit)
 if platform.system() != "Windows":
@@ -441,6 +448,8 @@ def run_job(job: dict, port: int, worker_id: int = 0,
     start = time.time()
     stats: dict = {}
     proc = None
+    watchdog_fired = threading.Event()
+    watchdog: threading.Timer | None = None
 
     try:
         proc = subprocess.Popen(
@@ -456,6 +465,27 @@ def run_job(job: dict, port: int, worker_id: int = 0,
         )
         with _claude_lock:
             _claude_procs[worker_id] = proc
+
+        # Wall-clock watchdog. The stdout-read loop below blocks on
+        # `for line in proc.stdout:`, so if the agent stalls (Chrome
+        # stuck on browser_wait_for during a network drop, MCP server
+        # deadlock, etc.) the for-loop waits forever and the existing
+        # `proc.wait(timeout=300)` at the bottom never runs. A timer
+        # running in a separate thread kills the process tree after
+        # APPLY_WATCHDOG_SEC, which causes the read loop to exit on EOF
+        # and we can return a clean `failed:watchdog_timeout`.
+        def _fire_watchdog() -> None:
+            if proc is not None and proc.poll() is None:
+                watchdog_fired.set()
+                logger.warning(
+                    "[W%d] Watchdog firing after %ds on job %r",
+                    worker_id, APPLY_WATCHDOG_SEC, job.get("title", "?")[:40],
+                )
+                _kill_process_tree(proc.pid)
+
+        watchdog = threading.Timer(APPLY_WATCHDOG_SEC, _fire_watchdog)
+        watchdog.daemon = True
+        watchdog.start()
 
         proc.stdin.write(agent_prompt)
         proc.stdin.close()
@@ -518,6 +548,18 @@ def run_job(job: dict, port: int, worker_id: int = 0,
         proc.wait(timeout=300)
         returncode = proc.returncode
         proc = None
+
+        # If the watchdog fired, treat as a hard timeout regardless of
+        # whatever partial RESULT:* token the agent may have emitted
+        # (e.g. a speculative RESULT:APPLIED before the submit confirm
+        # would be a false positive if the kill happened mid-submit).
+        if watchdog_fired.is_set():
+            elapsed = int(time.time() - start)
+            duration_ms = int((time.time() - start) * 1000)
+            add_event(f"[W{worker_id}] WATCHDOG ({elapsed}s): {job['title'][:30]}")
+            update_state(worker_id, status="failed",
+                         last_action=f"WATCHDOG ({elapsed}s)")
+            return "failed:watchdog_timeout", duration_ms
 
         if returncode and returncode < 0:
             return "skipped", int((time.time() - start) * 1000)
@@ -583,6 +625,8 @@ def run_job(job: dict, port: int, worker_id: int = 0,
         update_state(worker_id, status="failed", last_action=f"ERROR: {str(e)[:25]}")
         return f"failed:{str(e)[:100]}", duration_ms
     finally:
+        if watchdog is not None:
+            watchdog.cancel()
         with _claude_lock:
             _claude_procs.pop(worker_id, None)
         if proc is not None and proc.poll() is None:
