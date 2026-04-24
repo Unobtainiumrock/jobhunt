@@ -245,9 +245,11 @@ class LLMClient:
         payload: dict = {
             "model": self.model,
             "max_tokens": max_tokens,
-            "temperature": temperature,
             "messages": claude_messages,
         }
+        # Opus 4.7 rejects `temperature` (deprecated); Sonnet/Haiku still accept it.
+        if not self.model.startswith("claude-opus-4-7"):
+            payload["temperature"] = temperature
         if system_parts:
             payload["system"] = "\n\n".join(system_parts)
 

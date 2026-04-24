@@ -252,6 +252,30 @@ def search_employer(
 
 # -- Fetch details -----------------------------------------------------------
 
+def _location_from_external_path(external_path: str) -> str:
+    """Extract a human-readable location from a Workday external path.
+
+    Workday tenants encode location in the URL path segment after ``/job/``,
+    e.g. ``/External_Career_Site/job/Brazil-So-Paulo-So-Paulo/Lead-...``.
+    Returns the raw segment with dashes converted to spaces, or an empty
+    string if the path doesn't match the expected shape.
+
+    Used as a fallback when the search API returns empty ``locationsText``
+    and the detail API doesn't surface a location either (which is how most
+    Thomson Reuters postings arrive in the DB).
+    """
+    if not external_path:
+        return ""
+    parts = external_path.strip("/").split("/")
+    try:
+        idx = parts.index("job")
+    except ValueError:
+        return ""
+    if idx + 1 >= len(parts):
+        return ""
+    return parts[idx + 1].replace("-", " ").strip()
+
+
 def _fetch_one_detail(employer: dict, job: dict) -> dict:
     """Fetch detail for a single job."""
     try:
@@ -265,10 +289,27 @@ def _fetch_one_detail(employer: dict, job: dict) -> dict:
         job["time_type"] = info.get("timeType", "")
         job["remote_type"] = info.get("remoteType", "")
 
+        # Location: prefer search-API (locationsText), then detail, then URL.
+        # Detail keys vary across tenants — try the common ones in turn.
+        if not job.get("location"):
+            detail_loc = (
+                info.get("location")
+                or info.get("locationsText")
+                or info.get("primaryLocation")
+                or ""
+            )
+            job["location"] = detail_loc or _location_from_external_path(
+                job.get("external_path", "")
+            )
+
     except Exception as e:
         job["full_description"] = ""
         job["apply_url"] = ""
         job["detail_error"] = str(e)
+        if not job.get("location"):
+            job["location"] = _location_from_external_path(
+                job.get("external_path", "")
+            )
 
     return job
 

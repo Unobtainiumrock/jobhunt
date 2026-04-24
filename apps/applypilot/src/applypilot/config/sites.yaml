@@ -23,6 +23,24 @@ blocked:
     - "%google.jobs%"
     - "%accenture%"
     - "%workopolis.com/out%"
+    # Country-in-path exclusions for Workday-style tenants. Skips roles
+    # whose URL encodes a country we can't work in without relocation. Keep
+    # the list conservative — only match foreign-office-only URL structures.
+    # Global-remote listings typically don't have the country in the path.
+    - "%myworkdayjobs.com%/Brazil-%"
+    - "%myworkdayjobs.com%/Mexico-%"
+    - "%myworkdayjobs.com%/Argentina-%"
+    - "%myworkdayjobs.com%/India-%"
+    - "%myworkdayjobs.com%/Philippines-%"
+    - "%myworkdayjobs.com%/United-Kingdom-%"
+    - "%myworkdayjobs.com%/UK-%"
+    - "%myworkdayjobs.com%/Ireland-%"
+    - "%myworkdayjobs.com%/Germany-%"
+    - "%myworkdayjobs.com%/Japan-%"
+    # Canada: excluded because candidate is US-only work-authorized.
+    # Most Canadian Workday tenant URLs are hybrid Toronto/Ottawa roles
+    # requiring Canadian auth — not feasible without sponsorship.
+    - "%myworkdayjobs.com%/Canada-%"
 
 # ── Blocked SSO domains — cannot authenticate through these ──────────────
 blocked_sso:

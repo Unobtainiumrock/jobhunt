@@ -115,13 +115,16 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
 
         if target_url:
             like = f"%{target_url.split('?')[0].rstrip('/')}%"
+            # Note: `apply_status != 'in_progress'` evaluates to NULL (falsy)
+            # when apply_status IS NULL — so a fresh row would be filtered out.
+            # Explicit NULL-or-not-in-progress predicate fixes that.
             row = conn.execute("""
                 SELECT url, title, site, application_url, tailored_resume_path,
                        fit_score, location, full_description, cover_letter_path
                 FROM jobs
                 WHERE (url = ? OR application_url = ? OR application_url LIKE ? OR url LIKE ?)
                   AND tailored_resume_path IS NOT NULL
-                  AND apply_status != 'in_progress'
+                  AND (apply_status IS NULL OR apply_status != 'in_progress')
                 LIMIT 1
             """, (target_url, target_url, like, like)).fetchone()
         else:

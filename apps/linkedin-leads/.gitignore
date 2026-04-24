@@ -34,7 +34,14 @@ htmlcov/
 *.egg-info/
 
 # --- Chrome / browser session ---
-profile/
+# The `profile/` dir holds both the ATS form-fill profile (user_profile.yaml,
+# PII — stays local) and Chrome-profile state (cookies, sessions). Only the
+# example template is committed; everything else is ignored. Must use
+# `profile/*` (not `profile/`) so the child-level negation below can re-include
+# the template — gitignore spec forbids re-including anything under a fully
+# excluded directory.
+profile/*
+!profile/user_profile.example.yaml
 chrome-profile/
 *.session
 

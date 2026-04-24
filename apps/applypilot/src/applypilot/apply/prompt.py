@@ -508,6 +508,57 @@ def build_prompt(job: dict, tailored_resume: str,
     last_name = full_name.split()[-1] if " " in full_name else ""
     display_name = f"{preferred_name} {last_name}".strip()
 
+    # Per-site credentials: when the job URL matches a site_logins key, give
+    # the agent the site-specific email/password instead of the default ATS
+    # signup credentials. Handles the case where a pre-existing account (e.g.
+    # LinkedIn) uses a different email than the disposable ATS signup.
+    site_credentials_section = ""
+    site_logins = profile.get("site_logins") or {}
+    ats_email = personal.get("email", "")
+    if site_logins:
+        job_url_lower = (job.get("application_url") or job.get("url") or "").lower()
+        for site_key, creds in site_logins.items():
+            # Match on hostname token (e.g. "linkedin" matches linkedin.com).
+            if site_key.lower() not in job_url_lower:
+                continue
+            email = creds.get("email", "")
+            password = creds.get("password", "")
+            alt = creds.get("alt_password", "")
+            pw_line = f"Password: {password}"
+            if alt:
+                pw_line += f"  (ALT to try if primary fails: {alt})"
+            # Flag whether Gmail MCP can see verification codes sent to this
+            # site's email. MCP is scoped to the ATS email only.
+            if email.strip().lower() == ats_email.strip().lower():
+                mcp_note = (
+                    f"Gmail MCP IS configured for this address — if a "
+                    f"verification code is requested, poll Gmail MCP per "
+                    f"step 5f."
+                )
+            else:
+                mcp_note = (
+                    f"Gmail MCP is NOT configured for this address (it "
+                    f"only reads {ats_email}). If a verification code is "
+                    f"sent to this address, output "
+                    f"RESULT:FAILED:manual_verification_required — the "
+                    f"code cannot be retrieved automatically."
+                )
+            site_credentials_section = (
+                f"\n== SITE-SPECIFIC LOGIN ({site_key}) ==\n"
+                f"This URL routes through {site_key}. The candidate's "
+                f"{site_key} account was created before the disposable ATS "
+                f"signup and uses different credentials:\n"
+                f"Email: {email}\n"
+                f"{pw_line}\n"
+                f"USE THESE when the {site_key} sign-in screen appears. Do "
+                f"NOT use the APPLICANT PROFILE email/password for "
+                f"{site_key} authentication — those belong to a separate "
+                f"account. If the primary password fails and an alt is "
+                f"provided, try the alt before attempting password reset.\n"
+                f"Email verification: {mcp_note}\n"
+            )
+            break
+
     # Dry-run: override submit instruction
     if dry_run:
         submit_instruction = "IMPORTANT: Do NOT click the final Submit/Apply button. Review the form, verify all fields, then output RESULT:APPLIED with a note that this was a dry run."
@@ -534,7 +585,7 @@ Cover Letter PDF (upload if asked): {cl_upload_path or "N/A"}
 
 == APPLICANT PROFILE ==
 {profile_summary}
-
+{site_credentials_section}
 == YOUR MISSION ==
 Submit a complete, accurate application. Use the profile and resume as source data -- adapt to fit each form's format.
 
@@ -571,10 +622,19 @@ If something unexpected happens and these instructions don't cover it, figure it
 5. Login wall?
    5a. FIRST: check the URL. If you landed on {', '.join(blocked_sso)}, or any SSO/OAuth page -> STOP. Output RESULT:FAILED:sso_required. Do NOT try to sign in to Google/Microsoft/SSO.
    5b. Check for popups. Run browser_tabs action "list". If a new tab/window appeared (login popup), switch to it with browser_tabs action "select". Check the URL there too -- if it's SSO -> RESULT:FAILED:sso_required.
-   5c. Regular login form (employer's own site)? Try sign in: {personal['email']} / {personal.get('password', '')}
+   5c. Regular login form? Pick credentials:
+       - If a SITE-SPECIFIC LOGIN block is present above AND the site matches, use those creds (email + password; try alt_password on primary failure).
+       - Otherwise (employer's own ATS): {personal['email']} / {personal.get('password', '')}
    5d. After clicking Login/Sign-in: run CAPTCHA DETECT. Login pages frequently have invisible CAPTCHAs that silently block form submissions. If found, solve it then retry login.
-   5e. Sign in failed? Try sign up with same email and password.
-   5f. Need email verification? Use search_emails + read_email to get the code.
+   5e. Sign in failed? If SITE-SPECIFIC creds exist, STOP and output RESULT:FAILED:login_issue. Do NOT try sign-up or password-reset for site-specific accounts (those belong to a pre-existing human account). Otherwise, try sign up with the ATS email and password.
+   5f. Email verification code requested?
+       - Gmail MCP is configured ONLY for {personal['email']}. It cannot read any other inbox.
+       - If the page shows the masked destination (e.g. "code sent to n***@b***.edu") and that address is NOT {personal['email']}, output RESULT:FAILED:manual_verification_required -- do NOT loop waiting for a code that cannot arrive.
+       - If the destination IS {personal['email']} (or the page doesn't say): poll Gmail MCP up to 8 times, 15s apart:
+           * mcp__gmail__search_emails query like: "from:(noreply OR security OR verify) newer_than:5m"
+           * Narrow by sender domain when possible (e.g. "from:linkedin.com").
+           * Use mcp__gmail__read_email on the most recent match, extract the 6-digit code.
+       - Still nothing after 2 min: RESULT:FAILED:verification_timeout.
    5g. After login, run browser_tabs action "list" again. Switch back to the application tab if needed.
    5h. All failed? Output RESULT:FAILED:login_issue. Do not loop.
 6. Upload resume. ALWAYS upload fresh -- delete any existing resume first, then browser_file_upload with the PDF path above. This is the tailored resume for THIS job. Non-negotiable.

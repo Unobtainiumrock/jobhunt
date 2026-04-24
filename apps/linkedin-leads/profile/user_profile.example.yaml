@@ -1,0 +1,219 @@
+# Unified user profile template for the jobhunt monorepo.
+#
+# Copy this file to `user_profile.yaml` in the same directory and fill in your
+# own values. The real `user_profile.yaml` is gitignored so your PII stays
+# local. Only this *.example.yaml is committed.
+#
+# Two consumers read this file:
+#   - linkedin-leads pipeline (recruiter-reply drafting, classification)
+#     uses the `identity`, `summary`, `expertise_areas`, `skills`, `experience`,
+#     `education`, `projects`, `goals`, `preferences`, `voice`, `personal`
+#     sections.
+#   - applypilot apply stage (ATS form filling) uses the `ats` section at the
+#     bottom. `ats.identity_extra` overrides top-level `identity` where fields
+#     differ (e.g. an ATS-specific email distinct from the recruiter one).
+#
+# All strings are free-form unless noted. Arrays can have as many entries as
+# you like; the template shows one or two per shape.
+
+# ─── RECRUITER-FACING IDENTITY ───────────────────────────────────────────────
+identity:
+  name: "Jane Doe"
+  phone: "+15555550100"
+  email: "jane.doe@example.com"
+  website: "https://example.com"
+  linkedin: "https://linkedin.com/in/yourhandle"
+  github: "https://github.com/yourhandle"
+  location: "City, ST 00000"
+  remote_preference: "flexible"   # flexible | remote | hybrid | on-site
+
+# Optional — prize/award history for resume narrative
+achievements:
+  - title: "Example Award or Hackathon Win"
+    date: "YYYY-MM"
+    description: "One-sentence description of what you built and why it won."
+    repo: "https://github.com/yourhandle/repo"
+    details: "Longer details used by the tailor stage when relevant."
+
+# Short paragraph recruiters see first. Written in third-person, no fluff.
+summary: >
+  One-paragraph career summary. Highlight systems orientation, tangible outcomes,
+  and any credentials that shape how you are evaluated (veteran status, domain
+  specializations, etc.).
+
+expertise_areas:
+  - area: "Your First Expertise Area"
+    description: >
+      Concrete description of what you build in this area and the outcomes
+      you have delivered. Avoid generic buzzwords.
+  - area: "Your Second Expertise Area"
+    description: >
+      Same — name specific tools, methods, and measurable impact.
+
+skills:
+  technical:
+    - name: "Python"
+      proficiency: "expert"   # expert | advanced | intermediate | basic
+      years: 5
+      evidence:
+        - "project-name: what you built"
+        - "another-project: what you shipped"
+    - name: "Add more languages / frameworks / tools here"
+      proficiency: "advanced"
+      years: 3
+      evidence: []
+
+# Work history used for resume rendering + judge-stage fact-checking.
+experience:
+  - company: "Most Recent Employer"
+    title: "Your Title"
+    start: "YYYY-MM"
+    end: "present"
+    location: "City, ST (or Remote)"
+    bullets:
+      - "Shipped X, moved metric Y by Z%."
+      - "Led N-person team that delivered ..."
+  - company: "Prior Employer"
+    title: "Your Prior Title"
+    start: "YYYY-MM"
+    end: "YYYY-MM"
+    location: "City, ST"
+    bullets:
+      - "Impactful bullet with a number."
+
+education:
+  - school: "Your University"
+    degree: "M.S. / B.S. / etc."
+    field: "Your Field"
+    graduated: "YYYY"
+
+# Portfolio pieces referenced by the tailor stage.
+projects:
+  - name: "Project Name"
+    repo: "https://github.com/yourhandle/project"
+    description: "One-line description."
+
+goals:
+  short_term: "What you want to be doing in the next 6-12 months."
+  long_term: "Where you want your career to go."
+
+# Used by linkedin-leads scoring + geo filter.
+preferences:
+  target_titles:
+    - "Software Engineer"
+    - "Staff Engineer"
+  target_industries:
+    - "AI / ML"
+  excluded_industries:
+    - "Crypto / Web3"
+  compensation:
+    minimum: 150000
+    target: 180000
+    currency: "USD"
+    includes_equity: true
+  company_size: "any"
+  deal_breakers:
+    - "Below-market compensation"
+  priorities:
+    - "compensation"
+    - "tech-stack / interesting problems"
+  geo_policy:
+    base_city: "City, ST"
+    remote_ok: true
+    acceptable_regions:
+      - "United States"
+      - "Canada"
+      - "Remote (global)"
+
+voice:
+  tone: "direct, concise"
+  forbidden_phrases:
+    - "synergy"
+    - "leverage"
+  signature_elements:
+    - "phone"
+    - "website_link"
+
+personal:
+  interests:
+    - "Add personal interests, hobbies, etc."
+  traits:
+    - "Add defining traits."
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ATS form-fill fields (consumed by applypilot apply stage).
+# Any field here overrides the top-level `identity` block when both define it.
+# ─────────────────────────────────────────────────────────────────────────────
+ats:
+  identity_extra:
+    preferred_name: "Jane"
+    email: "jane.doe@example.com"
+    phone: "555-555-0100"
+    address: "123 Example St"
+    city: "City"
+    province_state: "State"
+    country: "United States"
+    postal_code: "00000"
+    linkedin_url: "https://www.linkedin.com/in/yourhandle"
+    github_url: "https://github.com/yourhandle"
+    portfolio_url: "https://example.com"
+    website_url: ""
+    password: "CHANGE_ME_TO_A_STRONG_DISPOSABLE_PASSWORD"
+
+  # Per-site credential overrides. When the job URL matches a site name here,
+  # the apply agent uses these creds instead of `identity_extra.email/password`.
+  # Useful when a pre-existing account (e.g. LinkedIn) uses a different email
+  # than your disposable ATS signup.
+  site_logins:
+    linkedin:
+      email: "your-linkedin-email@example.com"
+      password: "CHANGE_ME"
+      alt_password: ""   # optional second password to try
+
+  work_authorization:
+    legally_authorized_to_work: true
+    require_sponsorship: false
+    work_permit_type: "Citizen"       # Citizen | Permanent Resident | Visa | etc.
+
+  compensation:
+    salary_expectation: "180000"
+    salary_currency: "USD"
+    salary_range_min: "160000"
+    salary_range_max: "220000"
+
+  experience:
+    years_of_experience_total: "10"
+    education_level: "Bachelor's"     # "High School" | "Bachelor's" | "Master's" | "PhD"
+    current_title: "Your Current Title"
+    target_role: "Desired Role"
+
+  skills_boundary:
+    # Hard allow-list: the tailor stage will NOT mention tools outside these
+    # lists, and the judge stage flags fabrication. Keep honest.
+    programming_languages:
+      - "Python"
+    frameworks:
+      - "FastAPI"
+    tools:
+      - "Docker"
+      - "Git"
+
+  resume_facts:
+    # Companies/projects/schools that must appear verbatim; metrics that may be
+    # used as-is. Leave empty arrays when you want the tailor stage to stay
+    # flexible.
+    preserved_companies: []
+    preserved_projects: []
+    preserved_school:
+      - "Your University"
+    real_metrics: []
+
+  eeo_voluntary:
+    gender: "Decline to self-identify"
+    race_ethnicity: "Decline to self-identify"
+    veteran_status: "Decline to self-identify"
+    disability_status: "Decline to self-identify"
+
+  availability:
+    earliest_start_date: "Immediately"
