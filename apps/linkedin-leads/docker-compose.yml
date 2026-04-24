@@ -37,6 +37,13 @@ services:
         condition: service_started
     volumes:
       - app-data:/app/data
+      # Fix A: entity records (opportunities/leads/conversations/applications/
+      # interview_loops/prep_artifacts/tasks/signals) live in the shared
+      # /opt/jobhunt/data/entities/ dir so BAP and linkedin-leads both converge
+      # on the same physical files. Bind mount overrides the app-data volume
+      # for this subpath only — inbox.json, knowledge/, followups.json
+      # beneath /app/data still come from app-data.
+      - /opt/jobhunt/data/entities:/app/data/entities
     environment:
       - CDP_URL=http://desktop:9223
       - QDRANT_URL=http://qdrant:6333
@@ -69,9 +76,15 @@ services:
       - "127.0.0.1:3457:3457"
     volumes:
       - app-data:/app/data
-      # JH-PH8 prep: expose the BAP jobhunt.db + entities read-only so the
-      # review UI can surface applications alongside recruiter replies
-      # without needing to round-trip through the pipeline container.
+      # Fix A: entity records flow into the shared dir (same mount as
+      # listener — review writes workflow state transitions here too).
+      - /opt/jobhunt/data/entities:/app/data/entities
+      # Phase 8: expose the BAP jobhunt.db read-only so the Applications
+      # and Pipeline tabs can query it without routing through the
+      # pipeline container. (/jobhunt/entities/ now equals
+      # /app/data/entities/ under Fix A, but the RO second mount stays
+      # for semantic clarity and because the review UI's JH-PH8 code
+      # specifically references /jobhunt/jobhunt.db.)
       - /opt/jobhunt/data:/jobhunt:ro
     environment:
       - REVIEW_HOST=0.0.0.0
@@ -100,6 +113,10 @@ services:
       - desktop
     volumes:
       - app-data:/app/data
+      # Fix A: approve / followup actions from Telegram may update entity
+      # state (e.g. lead → responded). Same bind mount as listener/review
+      # so all writes converge on /opt/jobhunt/data/entities/.
+      - /opt/jobhunt/data/entities:/app/data/entities
     environment:
       - HEALTH_TELEGRAM_BOT_TOKEN=${HEALTH_TELEGRAM_BOT_TOKEN:-}
       - HEALTH_TELEGRAM_CHAT_ID=${HEALTH_TELEGRAM_CHAT_ID:-}
@@ -118,6 +135,9 @@ services:
       - listener
     volumes:
       - app-data:/app/data:ro
+      # Fix A: read-only view of the shared entity dir. Healthdog only
+      # inspects file mtimes for staleness alerts; never writes.
+      - /opt/jobhunt/data/entities:/app/data/entities:ro
       # Read-only socket mount for container restart-count detection.
       # Security note: RO on the socket file does not limit Docker API
       # access (Docker daemon is the policy boundary); any healthdog
