@@ -71,4 +71,5 @@ def load_profile_from_yaml(yaml_path: Path | str) -> dict[str, Any]:
         "eeo_voluntary": ats.get("eeo_voluntary") or {},
         "availability": ats.get("availability") or {},
         "site_logins": ats.get("site_logins") or {},
+        "eligibility": ats.get("eligibility") or {},
     }

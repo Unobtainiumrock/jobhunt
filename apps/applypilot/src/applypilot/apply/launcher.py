@@ -153,6 +153,12 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
             # different URLs (e.g. LinkedIn listing vs. company Workday
             # portal — both map to the same opportunity ID via the stable
             # hash in jobhunt_core, but they are separate rows in jobs).
+            #
+            # geo_fit filter: skip rows the geo_fit classifier marked as
+            # fully_ineligible (on-site/hybrid in a country outside the
+            # user's authorized list). NULL geo_fit passes through — a row
+            # discovered before the classifier ran should still be pickable;
+            # the scorer/enrichment pipeline will populate it on next pass.
             row = conn.execute(f"""
                 SELECT url, title, site, application_url, tailored_resume_path,
                        fit_score, location, full_description, cover_letter_path
@@ -161,6 +167,7 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
                   AND (apply_status IS NULL OR apply_status = 'failed')
                   AND (apply_attempts IS NULL OR apply_attempts < ?)
                   AND fit_score >= ?
+                  AND (geo_fit IS NULL OR geo_fit != 'fully_ineligible')
                   AND NOT EXISTS (
                       SELECT 1 FROM jobs dupe
                       WHERE dupe.site  = jobs.site

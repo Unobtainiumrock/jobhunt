@@ -161,6 +161,26 @@ def run_scoring(limit: int = 0, rescore: bool = False) -> dict:
         )
     conn.commit()
 
+    # Deterministic geo_fit pass alongside the skill score. Cheap, fast,
+    # no LLM — keeps the scorer prompt focused on skill match while still
+    # flagging non-workable roles before tailor/cover/apply spend money
+    # on them. See scoring/geo_fit.py for the classifier.
+    try:
+        from applypilot.config import load_profile
+        from applypilot.scoring.geo_fit import backfill_geo_fit
+        profile = load_profile()
+        elig = profile.get("eligibility") or {}
+        if elig:
+            tallies = backfill_geo_fit(conn, elig)
+            log.info("geo_fit classification: %s", tallies)
+        else:
+            log.warning(
+                "eligibility block missing from profile.yaml — skipping "
+                "geo_fit classification. Add ats.eligibility.* to enable.",
+            )
+    except Exception:
+        log.exception("geo_fit classification failed; continuing")
+
     elapsed = time.time() - t0
     log.info("Done: %d scored in %.1fs (%.1f jobs/sec)", len(results), elapsed, len(results) / elapsed if elapsed > 0 else 0)
 

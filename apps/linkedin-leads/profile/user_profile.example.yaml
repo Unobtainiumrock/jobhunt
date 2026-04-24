@@ -217,3 +217,18 @@ ats:
 
   availability:
     earliest_start_date: "Immediately"
+
+  # Eligibility policy — used by scorer's geo_fit classifier and the apply
+  # stage's filter. Deterministic rules engine, not LLM-driven: a role
+  # whose location country is NOT in `countries_authorized_to_work` AND
+  # is NOT remote-eligible will be marked `fully_ineligible` and skipped
+  # regardless of skill-fit score.
+  eligibility:
+    countries_authorized_to_work:
+      - "United States"       # where you can legally work without sponsorship
+    countries_acceptable_if_remote:
+      - "United States"
+      - "Canada"
+      - "Remote (global)"     # shorthand: pure remote regardless of country
+    relocation_willing: false
+    sponsorship_willing: false

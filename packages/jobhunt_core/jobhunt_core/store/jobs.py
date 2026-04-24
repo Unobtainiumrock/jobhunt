@@ -50,6 +50,12 @@ JOBS_COLUMN_REGISTRY: dict[str, str] = {
     "fit_score": "INTEGER",
     "score_reasoning": "TEXT",
     "scored_at": "TEXT",
+    # Eligibility (deterministic, computed from location + user's eligibility
+    # policy — separate dimension from fit_score, which is skill-only).
+    # Values: "eligible" | "hybrid_abroad" | "remote_abroad_ok" |
+    # "fully_ineligible" | NULL (not yet classified).
+    "geo_fit": "TEXT",
+    "geo_fit_reasoning": "TEXT",
     # Tailoring
     "tailored_resume_path": "TEXT",
     "tailored_at": "TEXT",
