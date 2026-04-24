@@ -360,11 +360,17 @@ def reset_failed() -> int:
 # ---------------------------------------------------------------------------
 
 def run_job(job: dict, port: int, worker_id: int = 0,
-            model: str = "sonnet", dry_run: bool = False) -> tuple[str, int]:
+            model: str = "sonnet", dry_run: bool = False,
+            budget_per_job: float = 0.0) -> tuple[str, int, float]:
     """Spawn a Claude Code session for one job application.
 
+    Args:
+        budget_per_job: Max USD the claude subprocess may spend on this
+            single job before Anthropic's billing layer terminates the
+            call (via Claude CLI's ``--max-budget-usd``). 0 = unlimited.
+
     Returns:
-        Tuple of (status_string, duration_ms). Status is one of:
+        Tuple of (status_string, duration_ms, cost_usd). Status is one of:
         'applied', 'expired', 'captcha', 'login_issue',
         'failed:reason', or 'skipped'.
     """
@@ -394,6 +400,12 @@ def run_job(job: dict, port: int, worker_id: int = 0,
         "--mcp-config", str(mcp_config_path),
         "--permission-mode", "bypassPermissions",
         "--no-session-persistence",
+    ]
+    if budget_per_job and budget_per_job > 0:
+        # Claude CLI terminates the call with a budget-exceeded signal if
+        # the cumulative API cost for this subprocess exceeds the cap.
+        cmd.extend(["--max-budget-usd", f"{budget_per_job:.2f}"])
+    cmd += [
         # Principle-of-least-privilege: block every gmail tool except the
         # two applypilot actually needs (search_emails + read_email for
         # pulling sign-up verification codes). The `gmail.readonly` OAuth
@@ -457,6 +469,10 @@ def run_job(job: dict, port: int, worker_id: int = 0,
     proc = None
     watchdog_fired = threading.Event()
     watchdog: threading.Timer | None = None
+    # Cost is populated from the claude stream-json `result` message; read it
+    # late-bound from `stats` so every return path can surface the same value.
+    def _cost() -> float:
+        return float(stats.get("cost_usd", 0.0) or 0.0)
 
     try:
         proc = subprocess.Popen(
@@ -566,10 +582,10 @@ def run_job(job: dict, port: int, worker_id: int = 0,
             add_event(f"[W{worker_id}] WATCHDOG ({elapsed}s): {job['title'][:30]}")
             update_state(worker_id, status="failed",
                          last_action=f"WATCHDOG ({elapsed}s)")
-            return "failed:watchdog_timeout", duration_ms
+            return "failed:watchdog_timeout", duration_ms, _cost()
 
         if returncode and returncode < 0:
-            return "skipped", int((time.time() - start) * 1000)
+            return "skipped", int((time.time() - start) * 1000), _cost()
 
         output = "\n".join(text_parts)
         elapsed = int(time.time() - start)
@@ -593,7 +609,7 @@ def run_job(job: dict, port: int, worker_id: int = 0,
                 add_event(f"[W{worker_id}] {result_status} ({elapsed}s): {job['title'][:30]}")
                 update_state(worker_id, status=result_status.lower(),
                              last_action=f"{result_status} ({elapsed}s)")
-                return result_status.lower(), duration_ms
+                return result_status.lower(), duration_ms, _cost()
 
         if "RESULT:FAILED" in output:
             for out_line in output.split("\n"):
@@ -609,28 +625,28 @@ def run_job(job: dict, port: int, worker_id: int = 0,
                         add_event(f"[W{worker_id}] {reason.upper()} ({elapsed}s): {job['title'][:30]}")
                         update_state(worker_id, status=reason,
                                      last_action=f"{reason.upper()} ({elapsed}s)")
-                        return reason, duration_ms
+                        return reason, duration_ms, _cost()
                     add_event(f"[W{worker_id}] FAILED ({elapsed}s): {reason[:30]}")
                     update_state(worker_id, status="failed",
                                  last_action=f"FAILED: {reason[:25]}")
-                    return f"failed:{reason}", duration_ms
-            return "failed:unknown", duration_ms
+                    return f"failed:{reason}", duration_ms, _cost()
+            return "failed:unknown", duration_ms, _cost()
 
         add_event(f"[W{worker_id}] NO RESULT ({elapsed}s)")
         update_state(worker_id, status="failed", last_action=f"no result ({elapsed}s)")
-        return "failed:no_result_line", duration_ms
+        return "failed:no_result_line", duration_ms, _cost()
 
     except subprocess.TimeoutExpired:
         duration_ms = int((time.time() - start) * 1000)
         elapsed = int(time.time() - start)
         add_event(f"[W{worker_id}] TIMEOUT ({elapsed}s)")
         update_state(worker_id, status="failed", last_action=f"TIMEOUT ({elapsed}s)")
-        return "failed:timeout", duration_ms
+        return "failed:timeout", duration_ms, _cost()
     except Exception as e:
         duration_ms = int((time.time() - start) * 1000)
         add_event(f"[W{worker_id}] ERROR: {str(e)[:40]}")
         update_state(worker_id, status="failed", last_action=f"ERROR: {str(e)[:25]}")
-        return f"failed:{str(e)[:100]}", duration_ms
+        return f"failed:{str(e)[:100]}", duration_ms, _cost()
     finally:
         if watchdog is not None:
             watchdog.cancel()
@@ -673,7 +689,9 @@ def _is_permanent_failure(result: str) -> bool:
 def worker_loop(worker_id: int = 0, limit: int = 1,
                 target_url: str | None = None,
                 min_score: int = 7, headless: bool = False,
-                model: str = "sonnet", dry_run: bool = False) -> tuple[int, int]:
+                model: str = "sonnet", dry_run: bool = False,
+                budget_per_job: float = 0.0,
+                budget_total: float = 0.0) -> tuple[int, int]:
     """Run jobs sequentially until limit is reached or queue is empty.
 
     Args:
@@ -684,6 +702,12 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
         headless: Run Chrome headless.
         model: Claude model name.
         dry_run: Don't click Submit.
+        budget_per_job: Hard cap on Anthropic spend per single job, in USD.
+            Passed through to claude subprocess as `--max-budget-usd`.
+            0 = unlimited (legacy behavior).
+        budget_total: Hard cap on cumulative spend across all jobs this
+            worker processes in this run. When crossed, worker exits
+            cleanly with ``budget_exhausted`` last_action. 0 = unlimited.
 
     Returns:
         Tuple of (applied_count, failed_count).
@@ -694,9 +718,21 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
     jobs_done = 0
     empty_polls = 0
     port = BASE_CDP_PORT + worker_id
+    cumulative_cost = 0.0
 
     while not _stop_event.is_set():
         if not continuous and jobs_done >= limit:
+            break
+
+        # Total-budget guard before picking the next job. Check here so we
+        # don't even launch Chrome for a job we'd immediately abort.
+        if budget_total and budget_total > 0 and cumulative_cost >= budget_total:
+            add_event(
+                f"[W{worker_id}] Budget cap ${budget_total:.2f} reached "
+                f"(spent ${cumulative_cost:.2f}) — stopping."
+            )
+            update_state(worker_id, status="done",
+                         last_action=f"budget_exhausted (${cumulative_cost:.2f})")
             break
 
         update_state(worker_id, status="idle", job_title="", company="",
@@ -726,8 +762,12 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
             add_event(f"[W{worker_id}] Launching Chrome...")
             chrome_proc = launch_chrome(worker_id, port=port, headless=headless)
 
-            result, duration_ms = run_job(job, port=port, worker_id=worker_id,
-                                            model=model, dry_run=dry_run)
+            result, duration_ms, cost_usd = run_job(
+                job, port=port, worker_id=worker_id,
+                model=model, dry_run=dry_run,
+                budget_per_job=budget_per_job,
+            )
+            cumulative_cost += cost_usd
 
             if result == "skipped":
                 release_lock(job["url"])
@@ -778,7 +818,9 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
 def main(limit: int = 1, target_url: str | None = None,
          min_score: int = 7, headless: bool = False, model: str = "sonnet",
          dry_run: bool = False, continuous: bool = False,
-         poll_interval: int = 60, workers: int = 1) -> None:
+         poll_interval: int = 60, workers: int = 1,
+         budget_per_job: float = 0.0,
+         budget_total: float = 0.0) -> None:
     """Launch the apply pipeline.
 
     Args:
@@ -791,6 +833,12 @@ def main(limit: int = 1, target_url: str | None = None,
         continuous: Run forever, polling for new jobs.
         poll_interval: Seconds between DB polls when queue is empty.
         workers: Number of parallel workers (default 1).
+        budget_per_job: Max USD each claude subprocess may spend per job.
+            Passed through as ``--max-budget-usd``. 0 = unlimited.
+        budget_total: Max cumulative USD the worker(s) may spend in this
+            run. Loop exits cleanly (``budget_exhausted``) when crossed.
+            0 = unlimited. With multi-worker, applied independently per
+            worker (each worker gets the full budget).
     """
     global POLL_INTERVAL
     POLL_INTERVAL = poll_interval
@@ -862,6 +910,8 @@ def main(limit: int = 1, target_url: str | None = None,
                     headless=headless,
                     model=model,
                     dry_run=dry_run,
+                    budget_per_job=budget_per_job,
+                    budget_total=budget_total,
                 )
             else:
                 # Multi-worker — distribute limit across workers
@@ -885,6 +935,8 @@ def main(limit: int = 1, target_url: str | None = None,
                             headless=headless,
                             model=model,
                             dry_run=dry_run,
+                            budget_per_job=budget_per_job,
+                            budget_total=budget_total,
                         ): i
                         for i in range(workers)
                     }

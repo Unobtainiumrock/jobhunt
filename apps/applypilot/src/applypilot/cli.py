@@ -172,6 +172,16 @@ def apply(
     mark_failed: Optional[str] = typer.Option(None, "--mark-failed", help="Manually mark a job URL as failed (provide URL)."),
     fail_reason: Optional[str] = typer.Option(None, "--fail-reason", help="Reason for --mark-failed."),
     reset_failed: bool = typer.Option(False, "--reset-failed", help="Reset all failed jobs for retry."),
+    budget_per_job: float = typer.Option(
+        0.0, "--budget-per-job",
+        help="Max USD the claude subprocess may spend on each single job "
+             "(pass-through to Claude CLI's --max-budget-usd). 0 = unlimited.",
+    ),
+    budget_total: float = typer.Option(
+        0.0, "--budget-total",
+        help="Max cumulative USD the worker may spend across this batch. "
+             "Stops cleanly with 'budget_exhausted' when crossed. 0 = unlimited.",
+    ),
 ) -> None:
     """Launch auto-apply to submit job applications."""
     _bootstrap()
@@ -255,6 +265,12 @@ def apply(
     console.print(f"  Model:    {model}")
     console.print(f"  Headless: {headless}")
     console.print(f"  Dry run:  {dry_run}")
+    if budget_per_job > 0 or budget_total > 0:
+        console.print(
+            f"  Budget:   per-job=${budget_per_job:.2f}  total=${budget_total:.2f}"
+            if budget_total > 0 else
+            f"  Budget:   per-job=${budget_per_job:.2f}"
+        )
     if url:
         console.print(f"  Target:   {url}")
     console.print()
@@ -268,6 +284,8 @@ def apply(
         dry_run=dry_run,
         continuous=continuous,
         workers=workers,
+        budget_per_job=budget_per_job,
+        budget_total=budget_total,
     )
 
 
