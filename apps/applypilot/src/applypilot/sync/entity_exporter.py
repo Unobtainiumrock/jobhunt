@@ -67,12 +67,18 @@ def entities_dir() -> Path:
 
     Precedence:
       1. ``JOBHUNT_ENTITIES_DIR`` env var.
-      2. Default: ``~/Desktop/github/linkedin-leads/data/entities``.
+      2. Default: ``<APP_DIR>/entities`` (i.e. ``~/.applypilot/entities``).
+
+    The dir is auto-created on first write by the caller (pydantic-backed
+    writer in ``jobhunt_core.store.write_opportunity``). This is a laptop-
+    side staging area — after writing, the remote-sync hook rsyncs it to
+    the server-authoritative ``/opt/jobhunt/data/entities/``.
     """
+    from applypilot.config import APP_DIR
     override = os.environ.get("JOBHUNT_ENTITIES_DIR", "").strip()
     if override:
         return Path(override).expanduser()
-    return Path.home() / "Desktop" / "github" / "linkedin-leads" / "data" / "entities"
+    return APP_DIR / "entities"
 
 
 # --- Status + source derivation ---
