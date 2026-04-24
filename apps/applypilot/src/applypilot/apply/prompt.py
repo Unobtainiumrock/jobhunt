@@ -622,12 +622,13 @@ If something unexpected happens and these instructions don't cover it, figure it
 5. Login wall?
    5a. FIRST: check the URL. If you landed on {', '.join(blocked_sso)}, or any SSO/OAuth page -> STOP. Output RESULT:FAILED:sso_required. Do NOT try to sign in to Google/Microsoft/SSO.
    5b. Check for popups. Run browser_tabs action "list". If a new tab/window appeared (login popup), switch to it with browser_tabs action "select". Check the URL there too -- if it's SSO -> RESULT:FAILED:sso_required.
-   5c. Regular login form? Pick credentials:
+   5c. ALREADY-SIGNED-IN PROBE. Before clicking any sign-in or create-account button, scan the snapshot for any of: "My Account", "Sign Out", "Hi [first name]", "Welcome back", the candidate's email shown in a header menu, an avatar/initials button in the top-right nav, or a "My Profile" link. If found, you are already authenticated for this tenant (the Chrome profile persists session cookies across apply invocations). SKIP the entire sign-in/sign-up dance; proceed directly to the application form. Most same-tenant repeat applies should hit this branch — never create a second account when one exists.
+   5d. Regular login form (not already signed in)? Pick credentials:
        - If a SITE-SPECIFIC LOGIN block is present above AND the site matches, use those creds (email + password; try alt_password on primary failure).
        - Otherwise (employer's own ATS): {personal['email']} / {personal.get('password', '')}
-   5d. After clicking Login/Sign-in: run CAPTCHA DETECT. Login pages frequently have invisible CAPTCHAs that silently block form submissions. If found, solve it then retry login.
-   5e. Sign in failed? If SITE-SPECIFIC creds exist, STOP and output RESULT:FAILED:login_issue. Do NOT try sign-up or password-reset for site-specific accounts (those belong to a pre-existing human account). Otherwise, try sign up with the ATS email and password.
-   5f. Email verification code requested?
+   5e. After clicking Login/Sign-in: run CAPTCHA DETECT. Login pages frequently have invisible CAPTCHAs that silently block form submissions. If found, solve it then retry login.
+   5f. Sign in failed, "account exists" error? FIRST try sign-in with the stated email + password one more time (session cookie may just be lagging). If that also fails AND SITE-SPECIFIC creds exist, STOP and output RESULT:FAILED:login_issue — the stored password is stale, do NOT trigger password-reset (spams the user's inbox). Otherwise (ATS credentials): try sign up with the ATS email and password.
+   5g. Email verification code requested?
        - Gmail MCP is configured ONLY for {personal['email']}. It cannot read any other inbox.
        - If the page shows the masked destination (e.g. "code sent to n***@b***.edu") and that address is NOT {personal['email']}, output RESULT:FAILED:manual_verification_required -- do NOT loop waiting for a code that cannot arrive.
        - If the destination IS {personal['email']} (or the page doesn't say): poll Gmail MCP up to 8 times, 15s apart:
@@ -635,9 +636,10 @@ If something unexpected happens and these instructions don't cover it, figure it
            * Narrow by sender domain when possible (e.g. "from:linkedin.com").
            * Use mcp__gmail__read_email on the most recent match, extract the 6-digit code.
        - Still nothing after 2 min: RESULT:FAILED:verification_timeout.
-   5g. After login, run browser_tabs action "list" again. Switch back to the application tab if needed.
-   5h. All failed? Output RESULT:FAILED:login_issue. Do not loop.
+   5h. After login, run browser_tabs action "list" again. Switch back to the application tab if needed.
+   5i. All failed? Output RESULT:FAILED:login_issue. Do not loop.
 6. Upload resume. ALWAYS upload fresh -- delete any existing resume first, then browser_file_upload with the PDF path above. This is the tailored resume for THIS job. Non-negotiable.
+   6a. DO NOT click "Autofill with Resume", "Parse Resume to Fill Profile", "Use LinkedIn to Apply", or similar ATS-parser shortcuts. They hallucinate entries (observed: Workday added 2 fake work-experience rows that had to be deleted mid-form) and cost extra turns cleaning up. Always fill manually from the APPLICANT PROFILE + TAILORED RESUME data — you have the authoritative source.
 7. Upload cover letter if there's a field for it. Text field -> paste the cover letter text. File upload -> use the cover letter PDF path.
 8. Check ALL pre-filled fields. ATS systems parse your resume and auto-fill -- it's often WRONG.
    - "Current Job Title" or "Most Recent Title" -> use the title from the TAILORED RESUME summary, NOT whatever the parser guessed.
