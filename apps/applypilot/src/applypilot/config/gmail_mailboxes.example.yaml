@@ -1,0 +1,34 @@
+# Optional: declare additional Gmail mailboxes the apply agent can read.
+#
+# The default Gmail MCP (name "gmail") always reads from
+# ~/.gmail-mcp/credentials.json — the disposable ATS signup email. If a
+# site account predates the ATS signup (e.g. a LinkedIn account under a
+# Berkeley edu or work email), that account's verification codes go to a
+# mailbox the default MCP can't see.
+#
+# Each extra mailbox entry below spawns its own Gmail MCP process with
+# env-scoped credential paths. Tool names become mcp__<name>__search_emails,
+# mcp__<name>__read_email.
+#
+# Setup steps per extra mailbox:
+#   1. mkdir -p ~/.gmail-mcp-<friendly>
+#   2. cp ~/.gmail-mcp/gcp-oauth.keys.json ~/.gmail-mcp-<friendly>/
+#      (reuse the same GCP OAuth client — it's just the app identity)
+#   3. GMAIL_OAUTH_PATH=~/.gmail-mcp-<friendly>/gcp-oauth.keys.json \
+#      GMAIL_CREDENTIALS_PATH=~/.gmail-mcp-<friendly>/credentials.json \
+#      HTTPS_PROXY= HTTP_PROXY= \
+#      node ~/Desktop/github/Gmail-MCP-Server/dist/index.js auth \
+#        --scopes=gmail.readonly
+#   4. In the browser, pick the actual mailbox you want this instance to read.
+#   5. Add an entry to this file (copy to ~/.applypilot/gmail_mailboxes.yaml).
+#
+# Copy to ~/.applypilot/gmail_mailboxes.yaml and edit.
+
+# mailboxes:
+#   - name: gmail_berkeley                            # mcp__gmail_berkeley__*
+#     oauth: ~/.gmail-mcp-berkeley/gcp-oauth.keys.json
+#     credentials: ~/.gmail-mcp-berkeley/credentials.json
+#     # optional: email address this inbox reads. If set, the apply prompt can
+#     # match site login emails to the right MCP automatically. If omitted,
+#     # the agent falls back to trying the default mailbox first.
+#     email: nick@berkeley.edu

@@ -512,6 +512,17 @@ def build_prompt(job: dict, tailored_resume: str,
     # the agent the site-specific email/password instead of the default ATS
     # signup credentials. Handles the case where a pre-existing account (e.g.
     # LinkedIn) uses a different email than the disposable ATS signup.
+    # Build the list of Gmail mailboxes the agent can actually read — same
+    # source the launcher uses, so the prompt stays truthful about which
+    # addresses are MCP-reachable vs require manual intervention.
+    from applypilot.apply.launcher import _gmail_mcp_instances as _gmail_instances
+    gmail_mailboxes: list[tuple[str, str]] = []  # [(mcp_name, email)]
+    try:
+        for name, _oauth, _creds, email in _gmail_instances():
+            gmail_mailboxes.append((name, email))
+    except Exception:
+        pass
+
     site_credentials_section = ""
     site_logins = profile.get("site_logins") or {}
     ats_email = personal.get("email", "")
@@ -527,19 +538,30 @@ def build_prompt(job: dict, tailored_resume: str,
             pw_line = f"Password: {password}"
             if alt:
                 pw_line += f"  (ALT to try if primary fails: {alt})"
-            # Flag whether Gmail MCP can see verification codes sent to this
-            # site's email. MCP is scoped to the ATS email only.
-            if email.strip().lower() == ats_email.strip().lower():
+            # Flag whether any registered Gmail MCP can see verification
+            # codes sent to this site's email. Reachable inboxes: the
+            # default ``gmail`` mailbox (ATS email) plus every entry in
+            # ~/.applypilot/gmail_mailboxes.yaml.
+            email_lc = email.strip().lower()
+            matched_mcp = None
+            for mcp_name, mb_email in gmail_mailboxes:
+                if mb_email and mb_email.strip().lower() == email_lc:
+                    matched_mcp = mcp_name
+                    break
+            if matched_mcp:
                 mcp_note = (
-                    f"Gmail MCP IS configured for this address — if a "
-                    f"verification code is requested, poll Gmail MCP per "
-                    f"step 5f."
+                    f"Gmail MCP instance `mcp__{matched_mcp}__*` IS "
+                    f"configured for this address — if a verification code "
+                    f"is requested, use that instance per step 5g."
                 )
             else:
+                known = ", ".join(
+                    f"{n} ({e or 'unknown email'})" for n, e in gmail_mailboxes
+                )
                 mcp_note = (
-                    f"Gmail MCP is NOT configured for this address (it "
-                    f"only reads {ats_email}). If a verification code is "
-                    f"sent to this address, output "
+                    f"No Gmail MCP is configured for {email}. "
+                    f"Registered inboxes: {known or 'none'}. If a "
+                    f"verification code is sent to this address, output "
                     f"RESULT:FAILED:manual_verification_required — the "
                     f"code cannot be retrieved automatically."
                 )
@@ -673,12 +695,15 @@ signal; without them a retry starts over.
    5e. After clicking Login/Sign-in: run CAPTCHA DETECT. Login pages frequently have invisible CAPTCHAs that silently block form submissions. If found, solve it then retry login.
    5f. Sign in failed, "account exists" error? FIRST try sign-in with the stated email + password one more time (session cookie may just be lagging). If that also fails AND SITE-SPECIFIC creds exist, STOP and output RESULT:FAILED:login_issue — the stored password is stale, do NOT trigger password-reset (spams the user's inbox). Otherwise (ATS credentials): try sign up with the ATS email and password.
    5g. Email verification code requested?
-       - Gmail MCP is configured ONLY for {personal['email']}. It cannot read any other inbox.
-       - If the page shows the masked destination (e.g. "code sent to n***@b***.edu") and that address is NOT {personal['email']}, output RESULT:FAILED:manual_verification_required -- do NOT loop waiting for a code that cannot arrive.
-       - If the destination IS {personal['email']} (or the page doesn't say): poll Gmail MCP up to 8 times, 15s apart:
-           * mcp__gmail__search_emails query like: "from:(noreply OR security OR verify) newer_than:5m"
+       - Registered Gmail MCP instances (each reads one mailbox): {", ".join(f"mcp__{n}__* → {e or 'unknown'}" for n, e in gmail_mailboxes) or "none"}.
+       - If the page shows the masked destination (e.g. "code sent to n***@b***.edu"), check whether any registered mailbox above matches that address:
+         * Match → poll that specific MCP instance's search_emails (e.g. mcp__gmail_berkeley__search_emails) up to 8x, 15s apart.
+         * No match → output RESULT:FAILED:manual_verification_required. Do NOT loop waiting for a code that cannot arrive.
+       - If destination is unclear, try the default mcp__gmail__search_emails first; it reads the ATS email ({personal['email']}).
+       - Poll pattern:
+           * query like: "from:(noreply OR security OR verify) newer_than:5m"
            * Narrow by sender domain when possible (e.g. "from:linkedin.com").
-           * Use mcp__gmail__read_email on the most recent match, extract the 6-digit code.
+           * Use the matching `__read_email` tool on the most recent match, extract the 6-digit code.
        - Still nothing after 2 min: RESULT:FAILED:verification_timeout.
    5h. After login, run browser_tabs action "list" again. Switch back to the application tab if needed.
    5i. All failed? Output RESULT:FAILED:login_issue. Do not loop.

@@ -70,34 +70,113 @@ if platform.system() != "Windows":
 # MCP config
 # ---------------------------------------------------------------------------
 
+def _gmail_mcp_instances() -> list[tuple[str, Path, Path, str]]:
+    """Return the list of Gmail MCP instances to register.
+
+    Each tuple is ``(mcp_name, oauth_path, credentials_path, email)``.
+    ``email`` is the mailbox the instance reads (used by the prompt
+    builder to match a site's login email against the right MCP). May be
+    empty for the default instance if the user hasn't set ats.identity_extra.email.
+
+    The default instance (name ``gmail``,
+    ``~/.gmail-mcp/{gcp-oauth.keys,credentials}.json``) is always included.
+    Additional instances come from ``~/.applypilot/gmail_mailboxes.yaml``
+    — a list of mailboxes the user wants the agent to be able to read
+    (e.g. a Berkeley edu account that receives LinkedIn verification
+    codes). Each extra mailbox needs its own OAuth flow via
+    ``node dist/index.js auth --scopes=gmail.readonly`` run with
+    ``GMAIL_OAUTH_PATH`` and ``GMAIL_CREDENTIALS_PATH`` pointed at
+    dedicated files.
+
+    YAML shape:
+        mailboxes:
+          - name: gmail_berkeley         # becomes mcp__gmail_berkeley__*
+            oauth: ~/.gmail-mcp-berkeley/gcp-oauth.keys.json
+            credentials: ~/.gmail-mcp-berkeley/credentials.json
+            email: nick@berkeley.edu    # optional, improves prompt routing
+    """
+    default_dir = Path.home() / ".gmail-mcp"
+    # Default instance email comes from the loaded profile's ATS email.
+    default_email = ""
+    try:
+        from applypilot.config import load_profile
+        default_email = (load_profile().get("personal", {}) or {}).get("email", "")
+    except Exception:
+        pass
+    instances: list[tuple[str, Path, Path, str]] = [
+        ("gmail",
+         default_dir / "gcp-oauth.keys.json",
+         default_dir / "credentials.json",
+         default_email),
+    ]
+
+    mbox_file = config.APP_DIR / "gmail_mailboxes.yaml"
+    if mbox_file.exists():
+        try:
+            import yaml
+            data = yaml.safe_load(mbox_file.read_text(encoding="utf-8")) or {}
+            for entry in (data.get("mailboxes") or []):
+                name = (entry.get("name") or "").strip()
+                oauth = Path(entry["oauth"]).expanduser() if entry.get("oauth") else None
+                creds = Path(entry["credentials"]).expanduser() if entry.get("credentials") else None
+                email = (entry.get("email") or "").strip()
+                if not (name and oauth and creds):
+                    logger.warning("skipping malformed mailbox entry in %s: %s", mbox_file, entry)
+                    continue
+                if not name.startswith("gmail"):
+                    # Namespace every Gmail instance under a ``gmail*`` prefix
+                    # so the MCP tool names follow a predictable pattern the
+                    # prompt can reference (mcp__<name>__search_emails).
+                    name = f"gmail_{name}"
+                if not (oauth.exists() and creds.exists()):
+                    logger.warning(
+                        "skipping mailbox %r: oauth/credentials files missing "
+                        "(%s / %s)", name, oauth, creds,
+                    )
+                    continue
+                instances.append((name, oauth, creds, email))
+        except Exception:
+            logger.exception("failed to parse %s; ignoring", mbox_file)
+    return instances
+
+
 def _make_mcp_config(cdp_port: int) -> dict:
-    """Build MCP config dict for a specific CDP port."""
-    return {
-        "mcpServers": {
-            "playwright": {
-                "command": "npx",
-                "args": [
-                    "@playwright/mcp@latest",
-                    f"--cdp-endpoint=http://localhost:{cdp_port}",
-                    f"--viewport-size={config.DEFAULTS['viewport']}",
-                ],
-            },
-            # Gmail MCP — invoked from a locally-built fork of
-            # ArtyMcLabin/Gmail-MCP-Server (maintained hardened fork of the
-            # archived upstream GongRzhe/Gmail-MCP-Server). Using a local
-            # build instead of `npx` removes the supply-chain surface of
-            # auto-installing the npm package at every run. The scope the
-            # server will operate under is pinned into the saved credentials
-            # at `node dist/index.js auth --scopes=gmail.readonly` time, so
-            # it does not need to be re-passed here.
-            "gmail": {
-                "command": "node",
-                "args": [
-                    str(Path.home() / "Desktop/github/Gmail-MCP-Server/dist/index.js"),
-                ],
+    """Build MCP config dict for a specific CDP port.
+
+    The Gmail section enumerates every mailbox returned by
+    ``_gmail_mcp_instances`` — at minimum the default ``gmail`` instance,
+    plus any additional inboxes declared in
+    ``~/.applypilot/gmail_mailboxes.yaml``.
+    """
+    gmail_server = str(Path.home() / "Desktop/github/Gmail-MCP-Server/dist/index.js")
+    mcp_servers: dict = {
+        "playwright": {
+            "command": "npx",
+            "args": [
+                "@playwright/mcp@latest",
+                f"--cdp-endpoint=http://localhost:{cdp_port}",
+                f"--viewport-size={config.DEFAULTS['viewport']}",
+            ],
+        },
+    }
+    # Gmail MCP — invoked from a locally-built fork of
+    # ArtyMcLabin/Gmail-MCP-Server (maintained hardened fork of the archived
+    # upstream GongRzhe/Gmail-MCP-Server). Using a local build instead of
+    # `npx` removes the supply-chain surface of auto-installing the npm
+    # package at every run. Scopes are pinned at auth time.
+    #
+    # Each mailbox gets its own MCP server process with env-scoped
+    # credential paths. The agent sees them as mcp__<name>__* tool names.
+    for name, oauth_path, creds_path, _email in _gmail_mcp_instances():
+        mcp_servers[name] = {
+            "command": "node",
+            "args": [gmail_server],
+            "env": {
+                "GMAIL_OAUTH_PATH": str(oauth_path),
+                "GMAIL_CREDENTIALS_PATH": str(creds_path),
             },
         }
-    }
+    return {"mcpServers": mcp_servers}
 
 
 # ---------------------------------------------------------------------------
@@ -427,40 +506,32 @@ def run_job(job: dict, port: int, worker_id: int = 0,
         # Claude CLI terminates the call with a budget-exceeded signal if
         # the cumulative API cost for this subprocess exceeds the cap.
         cmd.extend(["--max-budget-usd", f"{budget_per_job:.2f}"])
+    # Principle-of-least-privilege: block every gmail tool except the two
+    # applypilot actually needs (search_emails + read_email for pulling
+    # sign-up verification codes). The `gmail.readonly` OAuth scope already
+    # prevents write operations server-side; this list is a defense-in-depth
+    # layer at the MCP boundary so prompt injection cannot attempt sends,
+    # deletes, filter creation, or thread/inbox enumeration beyond the
+    # narrow case of reading a verification email the agent already knows
+    # the subject of. The ban list is generated per Gmail MCP instance so
+    # that it covers every mailbox registered — each instance gets its own
+    # prefix (e.g. ``mcp__gmail_berkeley__*``).
+    _FORBIDDEN_GMAIL_TOOLS = (
+        "batch_delete_emails", "batch_modify_emails",
+        "create_filter", "create_filter_from_template", "create_label",
+        "delete_email", "delete_filter", "delete_label",
+        "download_attachment", "download_email", "draft_email",
+        "get_filter", "get_inbox_with_threads", "get_or_create_label",
+        "get_thread", "list_email_labels", "list_filters",
+        "list_inbox_threads", "modify_email", "modify_thread",
+        "reply_all", "send_email", "update_label",
+    )
+    disallowed = []
+    for mbox_name, _, _, _ in _gmail_mcp_instances():
+        for tool in _FORBIDDEN_GMAIL_TOOLS:
+            disallowed.append(f"mcp__{mbox_name}__{tool}")
     cmd += [
-        # Principle-of-least-privilege: block every gmail tool except the
-        # two applypilot actually needs (search_emails + read_email for
-        # pulling sign-up verification codes). The `gmail.readonly` OAuth
-        # scope already prevents write operations server-side; this list is
-        # a defense-in-depth layer at the MCP boundary so prompt injection
-        # cannot attempt sends, deletes, filter creation, or thread/inbox
-        # enumeration beyond the narrow case of reading a verification
-        # email the agent already knows the subject of.
-        "--disallowedTools", (
-            "mcp__gmail__batch_delete_emails,"
-            "mcp__gmail__batch_modify_emails,"
-            "mcp__gmail__create_filter,"
-            "mcp__gmail__create_filter_from_template,"
-            "mcp__gmail__create_label,"
-            "mcp__gmail__delete_email,"
-            "mcp__gmail__delete_filter,"
-            "mcp__gmail__delete_label,"
-            "mcp__gmail__download_attachment,"
-            "mcp__gmail__download_email,"
-            "mcp__gmail__draft_email,"
-            "mcp__gmail__get_filter,"
-            "mcp__gmail__get_inbox_with_threads,"
-            "mcp__gmail__get_or_create_label,"
-            "mcp__gmail__get_thread,"
-            "mcp__gmail__list_email_labels,"
-            "mcp__gmail__list_filters,"
-            "mcp__gmail__list_inbox_threads,"
-            "mcp__gmail__modify_email,"
-            "mcp__gmail__modify_thread,"
-            "mcp__gmail__reply_all,"
-            "mcp__gmail__send_email,"
-            "mcp__gmail__update_label"
-        ),
+        "--disallowedTools", ",".join(disallowed),
         "--output-format", "stream-json",
         "--verbose", "-",
     ]
