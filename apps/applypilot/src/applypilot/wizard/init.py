@@ -2,7 +2,9 @@
 
 Interactive flow that creates ~/.applypilot/ with:
   - resume.txt (and optionally resume.pdf)
-  - profile.json
+  - profile.yaml  (unified schema used by both applypilot + linkedin-leads;
+                   legacy profile.json is still loaded if the YAML is absent,
+                   but every new install produces YAML)
   - searches.yaml
   - .env (LLM API key)
 """
@@ -14,6 +16,7 @@ import shutil
 from pathlib import Path
 
 import typer
+import yaml
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
@@ -27,6 +30,11 @@ from applypilot.config import (
     SEARCH_CONFIG_PATH,
     ensure_dirs,
 )
+
+# Unified profile YAML. The YAML loader in config.load_profile prefers this
+# over the legacy JSON when both exist. Writing YAML future-proofs users for
+# the ats.site_logins and ats.eligibility blocks that have no JSON analogue.
+PROFILE_YAML_PATH = APP_DIR / "profile.yaml"
 
 console = Console()
 
@@ -78,91 +86,163 @@ def _setup_resume() -> None:
 # Profile
 # ---------------------------------------------------------------------------
 
+def _csv_to_list(raw: str) -> list[str]:
+    """Split a user-entered comma string into a cleaned list."""
+    return [s.strip() for s in raw.split(",") if s.strip()]
+
+
 def _setup_profile() -> dict:
-    """Walk through profile questions and return a nested profile dict."""
-    console.print(Panel("[bold]Step 2: Profile[/bold]\nTell ApplyPilot about yourself. This powers scoring, tailoring, and auto-fill."))
+    """Walk through profile questions and emit unified user_profile.yaml.
 
-    profile: dict = {}
+    Produces the same shape ``linkedin-leads/profile/user_profile.yaml`` uses,
+    so the single file feeds recruiter-reply drafting (identity block) and
+    apply-stage form fill (ats block). Missing sections are either omitted
+    entirely or emitted with empty placeholders — the adapter tolerates both.
+    """
+    console.print(Panel(
+        "[bold]Step 2: Profile[/bold]\n"
+        "Tell ApplyPilot about yourself. This powers scoring, tailoring, and "
+        "auto-fill. Output is ~/.applypilot/profile.yaml — keep it local; "
+        "the repo's .gitignore already excludes it."
+    ))
 
-    # -- Personal --
-    console.print("\n[bold cyan]Personal Information[/bold cyan]")
+    # -- Identity (recruiter-facing + baseline for ATS identity_extra) --
+    console.print("\n[bold cyan]Identity (recruiter-facing)[/bold cyan]")
     full_name = Prompt.ask("Full name")
-    profile["personal"] = {
-        "full_name": full_name,
-        "preferred_name": Prompt.ask("Preferred/nickname (leave blank to use first name)", default=""),
-        "email": Prompt.ask("Email address"),
-        "phone": Prompt.ask("Phone number", default=""),
-        "city": Prompt.ask("City"),
-        "province_state": Prompt.ask("Province/State (e.g. Ontario, California)", default=""),
-        "country": Prompt.ask("Country"),
-        "postal_code": Prompt.ask("Postal/ZIP code", default=""),
-        "address": Prompt.ask("Street address (optional, used for form auto-fill)", default=""),
-        "linkedin_url": Prompt.ask("LinkedIn URL", default=""),
-        "github_url": Prompt.ask("GitHub URL (optional)", default=""),
-        "portfolio_url": Prompt.ask("Portfolio URL (optional)", default=""),
-        "website_url": Prompt.ask("Personal website URL (optional)", default=""),
-        "password": Prompt.ask("Job site password (used for login walls during auto-apply)", password=True, default=""),
+    first_name = full_name.split()[0] if full_name else ""
+    identity = {
+        "name": full_name,
+        "phone": Prompt.ask("Phone number (with country code, e.g. +15105551234)", default=""),
+        "email": Prompt.ask("Recruiter-facing email (e.g. Berkeley/work address)"),
+        "website": Prompt.ask("Personal website URL (optional)", default=""),
+        "linkedin": Prompt.ask("LinkedIn URL"),
+        "github": Prompt.ask("GitHub URL (optional)", default=""),
+        "location": Prompt.ask("Location (e.g. 'San Francisco, CA 94131')"),
+        "remote_preference": Prompt.ask(
+            "Remote preference (flexible / remote / hybrid / on-site)",
+            default="flexible",
+        ),
     }
 
-    # -- Work Authorization --
-    console.print("\n[bold cyan]Work Authorization[/bold cyan]")
-    profile["work_authorization"] = {
-        "legally_authorized_to_work": Confirm.ask("Are you legally authorized to work in your target country?"),
-        "require_sponsorship": Confirm.ask("Will you now or in the future need sponsorship?"),
-        "work_permit_type": Prompt.ask("Work permit type (e.g. Citizen, PR, Open Work Permit — leave blank if N/A)", default=""),
+    # -- ATS block --
+    console.print("\n[bold cyan]ATS Form-Fill (applications)[/bold cyan]")
+    ats_email = Prompt.ask(
+        "Disposable ATS email for Workday/Greenhouse/etc signups "
+        "(defaults to identity email)",
+        default=identity["email"],
+    )
+    ats_password = Prompt.ask(
+        "Strong disposable password for ATS account creation",
+        password=True, default="",
+    )
+    identity_extra = {
+        "preferred_name": Prompt.ask(
+            "Preferred name (shown on resume + cover letter sign-off)",
+            default=first_name,
+        ),
+        "email": ats_email,
+        "phone": Prompt.ask("Phone with dashes (for US ATS forms, e.g. 510-555-1234)", default=""),
+        "address": Prompt.ask("Street address", default=""),
+        "city": Prompt.ask("City"),
+        "province_state": Prompt.ask("State/Province"),
+        "country": Prompt.ask("Country", default="United States"),
+        "postal_code": Prompt.ask("Postal/ZIP", default=""),
+        "linkedin_url": identity["linkedin"],
+        "github_url": identity["github"],
+        "portfolio_url": identity["website"],
+        "website_url": "",
+        "password": ats_password,
+    }
+
+    # -- Eligibility (used by geo_fit classifier + apply filter) --
+    console.print("\n[bold cyan]Work Eligibility[/bold cyan]")
+    authorized_raw = Prompt.ask(
+        "Countries you're legally authorized to work in (comma-separated)",
+        default="United States",
+    )
+    acceptable_remote_raw = Prompt.ask(
+        "Countries you'd accept remote roles in "
+        "(comma-separated; include 'Remote (global)' if any country is OK)",
+        default="United States, Canada, Remote (global)",
+    )
+    eligibility = {
+        "countries_authorized_to_work": _csv_to_list(authorized_raw),
+        "countries_acceptable_if_remote": _csv_to_list(acceptable_remote_raw),
+        "relocation_willing": Confirm.ask("Willing to relocate for the right role?", default=False),
+        "sponsorship_willing": Confirm.ask("Open to roles requiring visa sponsorship?", default=False),
+    }
+
+    # -- Work Authorization (ATS form fields — can differ from eligibility
+    #    policy; e.g. 'Citizen' is an ATS-form dropdown value, independent of
+    #    geo_fit policy above) --
+    console.print("\n[bold cyan]Work Authorization (ATS form fields)[/bold cyan]")
+    work_auth = {
+        "legally_authorized_to_work": Confirm.ask(
+            "Are you legally authorized to work in your primary target country?",
+            default=True,
+        ),
+        "require_sponsorship": Confirm.ask(
+            "Do you now or in the future require sponsorship?",
+            default=False,
+        ),
+        "work_permit_type": Prompt.ask(
+            "Work permit type (Citizen / Permanent Resident / Visa / N/A)",
+            default="Citizen",
+        ),
     }
 
     # -- Compensation --
     console.print("\n[bold cyan]Compensation[/bold cyan]")
     salary = Prompt.ask("Expected annual salary (number)", default="")
     salary_currency = Prompt.ask("Currency", default="USD")
-    salary_range = Prompt.ask("Acceptable range (e.g. 80000-120000)", default="")
+    salary_range = Prompt.ask("Acceptable range (e.g. 160000-220000)", default="")
     range_parts = salary_range.split("-") if "-" in salary_range else [salary, salary]
-    profile["compensation"] = {
+    compensation = {
         "salary_expectation": salary,
         "salary_currency": salary_currency,
         "salary_range_min": range_parts[0].strip(),
         "salary_range_max": range_parts[1].strip() if len(range_parts) > 1 else range_parts[0].strip(),
     }
 
-    # -- Experience --
+    # -- Experience + skills_boundary --
     console.print("\n[bold cyan]Experience[/bold cyan]")
     current_title = Prompt.ask("Current/most recent job title", default="")
-    target_role = Prompt.ask("Target role (what you're applying for, e.g. 'Senior Backend Engineer')", default=current_title)
-    profile["experience"] = {
+    experience = {
         "years_of_experience_total": Prompt.ask("Years of professional experience", default=""),
-        "education_level": Prompt.ask("Highest education (e.g. Bachelor's, Master's, PhD, Self-taught)", default=""),
+        "education_level": Prompt.ask(
+            "Highest education (Bachelor's / Master's / PhD / Self-taught)",
+            default="Bachelor's",
+        ),
         "current_title": current_title,
-        "target_role": target_role,
+        "target_role": Prompt.ask(
+            "Target role (e.g. 'Machine Learning Engineer')",
+            default=current_title,
+        ),
     }
 
-    # -- Skills Boundary --
-    console.print("\n[bold cyan]Skills[/bold cyan] (comma-separated)")
-    langs = Prompt.ask("Programming languages", default="")
-    frameworks = Prompt.ask("Frameworks & libraries", default="")
-    tools = Prompt.ask("Tools & platforms (e.g. Docker, AWS, Git)", default="")
-    profile["skills_boundary"] = {
-        "programming_languages": [s.strip() for s in langs.split(",") if s.strip()],
-        "frameworks": [s.strip() for s in frameworks.split(",") if s.strip()],
-        "tools": [s.strip() for s in tools.split(",") if s.strip()],
+    console.print("\n[bold cyan]Skills Allow-List[/bold cyan] (comma-separated)")
+    console.print("[dim]Tailor/judge stages will refuse to mention any tool not listed here.[/dim]")
+    skills_boundary = {
+        "programming_languages": _csv_to_list(Prompt.ask("Programming languages", default="")),
+        "frameworks": _csv_to_list(Prompt.ask("Frameworks & libraries", default="")),
+        "tools": _csv_to_list(Prompt.ask("Tools & platforms (e.g. Docker, AWS, Git)", default="")),
     }
 
-    # -- Resume Facts (preserved truths for tailoring) --
-    console.print("\n[bold cyan]Resume Facts[/bold cyan]")
-    console.print("[dim]These are preserved exactly during resume tailoring — the AI will never change them.[/dim]")
-    companies = Prompt.ask("Companies to always keep (comma-separated)", default="")
-    projects = Prompt.ask("Projects to always keep (comma-separated)", default="")
-    school = Prompt.ask("School name(s) to preserve", default="")
-    metrics = Prompt.ask("Real metrics to preserve (e.g. '99.9% uptime, 50k users')", default="")
-    profile["resume_facts"] = {
-        "preserved_companies": [s.strip() for s in companies.split(",") if s.strip()],
-        "preserved_projects": [s.strip() for s in projects.split(",") if s.strip()],
-        "preserved_school": school.strip(),
-        "real_metrics": [s.strip() for s in metrics.split(",") if s.strip()],
+    # -- Resume Facts --
+    console.print("\n[bold cyan]Resume Facts (preserved truths)[/bold cyan]")
+    console.print("[dim]Preserved exactly during tailoring — the AI will never alter them.[/dim]")
+    resume_facts = {
+        "preserved_companies": _csv_to_list(Prompt.ask("Companies to always keep", default="")),
+        "preserved_projects": _csv_to_list(Prompt.ask("Projects to always keep", default="")),
+        "preserved_school": _csv_to_list(Prompt.ask("School(s) to preserve", default="")),
+        "real_metrics": _csv_to_list(Prompt.ask(
+            "Real metrics to preserve (e.g. '99.9% uptime, 50k users')",
+            default="",
+        )),
     }
 
-    # -- EEO Voluntary (defaults) --
-    profile["eeo_voluntary"] = {
+    # -- EEO defaults --
+    eeo_voluntary = {
         "gender": "Decline to self-identify",
         "race_ethnicity": "Decline to self-identify",
         "veteran_status": "Decline to self-identify",
@@ -170,14 +250,71 @@ def _setup_profile() -> dict:
     }
 
     # -- Availability --
-    profile["availability"] = {
+    availability = {
         "earliest_start_date": Prompt.ask("Earliest start date", default="Immediately"),
     }
 
-    # Save
-    PROFILE_PATH.write_text(json.dumps(profile, indent=2, ensure_ascii=False), encoding="utf-8")
-    console.print(f"\n[green]Profile saved to {PROFILE_PATH}[/green]")
-    return profile
+    # -- Optional site_logins (for sites whose account predates the ATS
+    #    signup — most commonly LinkedIn if user has an existing account
+    #    under a non-ATS email) --
+    ats_block: dict = {
+        "identity_extra": identity_extra,
+        "work_authorization": work_auth,
+        "compensation": compensation,
+        "experience": experience,
+        "skills_boundary": skills_boundary,
+        "resume_facts": resume_facts,
+        "eeo_voluntary": eeo_voluntary,
+        "availability": availability,
+        "eligibility": eligibility,
+    }
+    if Confirm.ask(
+        "\nDo you have a LinkedIn account under a non-ATS email? "
+        "(adds site-specific credentials so apply uses the right login)",
+        default=False,
+    ):
+        li_email = Prompt.ask("  LinkedIn login email")
+        li_pw = Prompt.ask("  LinkedIn password", password=True)
+        li_alt = Prompt.ask(
+            "  Alt password (optional — agent tries this if primary fails)",
+            password=True, default="",
+        )
+        ats_block["site_logins"] = {
+            "linkedin": {
+                "email": li_email,
+                "password": li_pw,
+                "alt_password": li_alt,
+            }
+        }
+
+    profile_doc = {
+        "identity": identity,
+        "ats": ats_block,
+    }
+
+    PROFILE_YAML_PATH.write_text(
+        yaml.safe_dump(profile_doc, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    console.print(f"\n[green]Profile saved to {PROFILE_YAML_PATH}[/green]")
+
+    # Validate by round-tripping through the adapter — catches shape bugs now
+    # rather than at first apply.
+    try:
+        from jobhunt_core.profile import load_profile_from_yaml
+        loaded = load_profile_from_yaml(PROFILE_YAML_PATH)
+        missing = [k for k in (
+            "personal", "compensation", "work_authorization",
+            "experience", "skills_boundary", "eligibility",
+        ) if not loaded.get(k)]
+        if missing:
+            console.print(
+                f"[yellow]Warning: adapter output missing keys {missing}. "
+                f"Apply stage may error — re-run init or edit YAML manually.[/yellow]"
+            )
+    except Exception as exc:
+        console.print(f"[red]Profile validation failed: {exc}[/red]")
+    return profile_doc
 
 
 # ---------------------------------------------------------------------------
