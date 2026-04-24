@@ -168,7 +168,10 @@ def generate_cover_letter(
             )},
         ]
 
-        letter = client.chat(messages, max_tokens=1024, temperature=0.7)
+        # 4096 (up from 1024): Gemini 3 and other "thinking" models reserve
+        # budget for internal reasoning before emitting the final letter.
+        # A cover letter itself is ~300-500 tokens; the rest is headroom.
+        letter = client.chat(messages, max_tokens=4096, temperature=0.7)
         letter = sanitize_text(letter)  # auto-fix em dashes, smart quotes
         letter = _strip_preamble(letter)  # remove any "Here is the letter:" prefix
 

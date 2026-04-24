@@ -115,11 +115,26 @@ BULLETS: Strong verb + what you built + quantified impact. Vary verbs (Built, De
 - Preserved school: {school}
 - Must fit 1 page.
 
+## HONORS & AWARDS — PRESTIGE SIGNAL, DON'T DILUTE:
+- Preserve every entry from the original resume's Honors & Awards section in the
+  `honors_awards` array VERBATIM. Keep wording, dates, and attribution intact.
+- Do NOT move award entries into `projects` (a hackathon placement listed as a
+  project reads as "side project"; listed as an honor reads as "won against
+  competitors"). Keep the signal where it belongs.
+- Reorder within honors_awards by relevance to this target role if you want, but
+  drop nothing.
+
+## THINKING / OUTPUT DISCIPLINE:
+- Do NOT narrate your reasoning in the output ("Wait, let's move X to Y...").
+- Do NOT emit markdown headings, bullets, or parenthetical asides.
+- Your entire response must be a single JSON object starting with `{{` and
+  ending with `}}`. Anything else wastes output budget and fails the parser.
+
 {ADVERSARIAL_GUARDRAILS}
 
 ## OUTPUT: Return ONLY valid JSON. No markdown fences. No commentary. No "here is" preamble.
 
-{{"title":"Role Title","summary":"2-3 tailored sentences.","skills":{{"Languages":"...","Frameworks":"...","DevOps & Infra":"...","Databases":"...","Tools":"..."}},"experience":[{{"header":"Title at Company","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2","bullet 3","bullet 4"]}}],"projects":[{{"header":"Project Name - Description","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2"]}}],"education":"{school} | {education_level}"}}"""
+{{"title":"Role Title","summary":"2-3 tailored sentences.","skills":{{"Languages":"...","Frameworks":"...","DevOps & Infra":"...","Databases":"...","Tools":"..."}},"experience":[{{"header":"Title at Company","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2","bullet 3","bullet 4"]}}],"projects":[{{"header":"Project Name - Description","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2"]}}],"honors_awards":["1st Place - <Award Name> (<Org>, <Date>)","<other award>"],"education":"{school} | {education_level}"}}"""
 
 
 def _build_judge_prompt(profile: dict) -> str:
@@ -295,6 +310,25 @@ def assemble_resume_text(data: dict, profile: dict) -> str:
             lines.append(f"- {sanitize_text(b)}")
         lines.append("")
 
+    # Honors & Awards — prestige signal, kept as its own section so hackathon
+    # wins / placements read as "beat competitors" rather than "side project."
+    honors = data.get("honors_awards") or []
+    if honors:
+        lines.append("HONORS & AWARDS")
+        for item in honors:
+            # Support both flat strings ("1st Place — X") and dict shape
+            # ({"title": "...", "date": "...", "description": "..."}).
+            if isinstance(item, dict):
+                parts = [item.get("title", ""), item.get("organization", ""), item.get("date", "")]
+                line = " — ".join(p for p in parts if p)
+                lines.append(f"- {sanitize_text(line)}" if line else "")
+                desc = item.get("description") or item.get("details")
+                if desc:
+                    lines.append(f"  {sanitize_text(desc)}")
+            else:
+                lines.append(f"- {sanitize_text(str(item))}")
+        lines.append("")
+
     # Education
     lines.append("EDUCATION")
     lines.append(sanitize_text(str(data.get("education", ""))))
@@ -331,7 +365,10 @@ def judge_tailored_resume(
     ]
 
     client = get_client("judge")
-    response = client.chat(messages, max_tokens=512, temperature=0.1)
+    # 2048 (up from 512): Gemini 3 / Opus "thinking" models burn tokens on
+    # internal reasoning before emitting the final PASS/FAIL + issues text.
+    # 512 is enough for the verdict itself, not enough for think-then-answer.
+    response = client.chat(messages, max_tokens=2048, temperature=0.1)
 
     passed = "VERDICT: PASS" in response.upper()
     issues = "none"
@@ -405,7 +442,12 @@ def tailor_resume(
             {"role": "user", "content": f"ORIGINAL RESUME:\n{resume_text}\n\n---\n\nTARGET JOB:\n{job_text}\n\nReturn the JSON:"},
         ]
 
-        raw = client.chat(messages, max_tokens=2048, temperature=0.4)
+        # 8192 (up from 2048): Gemini 3 Pro uses ~3k tokens of internal
+        # reasoning before committing to the JSON output (~1.5k tokens of
+        # actual content). 2048 was getting truncated mid-JSON; 8192 gives
+        # enough headroom for think-then-commit without runaway cost
+        # (actual billing is per token emitted, not per budget cap).
+        raw = client.chat(messages, max_tokens=8192, temperature=0.4)
 
         # Parse JSON from response
         try:
