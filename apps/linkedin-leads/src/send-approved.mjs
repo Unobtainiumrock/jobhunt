@@ -138,6 +138,10 @@ function filterReplies(classified) {
     if (THREAD_FILTER && !urn.toLowerCase().includes(THREAD_FILTER) &&
       !participantName(convo).toLowerCase().includes(THREAD_FILTER)) continue;
 
+    if (reply.sent_at) {
+      skipped.push({ urn, recipient: participantName(convo), reason: 'already_sent' });
+      continue;
+    }
     if (reply.safety_passed !== true) {
       skipped.push({ urn, recipient: participantName(convo), reason: 'safety_passed_not_true' });
       continue;
@@ -176,6 +180,10 @@ function filterFollowups(queue) {
     if (THREAD_FILTER && !urn.toLowerCase().includes(THREAD_FILTER) &&
       !String(entry.task_id || '').toLowerCase().includes(THREAD_FILTER)) continue;
 
+    if (entry.sent_at) {
+      skipped.push({ urn, task_id: entry.task_id, reason: 'already_sent' });
+      continue;
+    }
     if (isTamperingDetected(entry.approved_message, entry.message, entry.manually_edited)) {
       skipped.push({
         urn,
