@@ -20,6 +20,9 @@
 
 set -euo pipefail
 
+# Hardcoded hostname for alert messages (OS hostname is misspelled "inkedin-leads").
+HOSTNAME_LABEL="linkedin-leads"
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE/.."
 
@@ -44,7 +47,7 @@ run_scrape() {
     log "cron scrape: starting"
     if ! docker compose exec -T listener npm run inbox 2>&1 | tee -a "$LOG_DIR/scrape.log"; then
         log "cron scrape: FAILED"
-        alert "cron scrape failed on $(hostname). Check $LOG_DIR/scrape.log"
+        alert "cron scrape failed on $HOSTNAME_LABEL. Check $LOG_DIR/scrape.log"
         return 1
     fi
     log "cron scrape: done"
@@ -55,7 +58,7 @@ run_pipeline() {
     # Pipeline is idempotent; running against an unchanged inbox is a no-op.
     if ! docker compose exec -T listener npm run pipeline 2>&1 | tee -a "$LOG_DIR/pipeline.log"; then
         log "cron pipeline: FAILED"
-        alert "cron pipeline failed on $(hostname). Check $LOG_DIR/pipeline.log"
+        alert "cron pipeline failed on $HOSTNAME_LABEL. Check $LOG_DIR/pipeline.log"
         return 1
     fi
     # Also purge drafts for threads the user has replied to manually since

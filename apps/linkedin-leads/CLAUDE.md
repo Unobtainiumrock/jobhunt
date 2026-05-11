@@ -15,13 +15,13 @@ git push origin main    # 1. ship source to GitHub
 ```
 
 `./bin/deploy` wraps
-`ssh hetzner 'cd /opt/linkedin-leads && git pull --ff-only && docker compose up -d --build'`.
+`ssh hetzner 'cd /opt/jobhunt/src/apps/linkedin-leads && git pull --ff-only && docker compose up -d --build'`.
 It is idempotent and safe to re-run.
 
 ## Do NOT
 
 - `rsync` / `scp` app code to Hetzner (retired path).
-- Edit files directly on `/opt/linkedin-leads` over SSH (next `git pull`
+- Edit files directly on `/opt/jobhunt/src/apps/linkedin-leads` over SSH (next `git pull`
   creates a working-tree conflict). Push through GitHub.
 - Rotate VNC/Caddy passwords or set up GitHub Actions auto-deploy without the
   user explicitly approving.
@@ -44,7 +44,7 @@ It is idempotent and safe to re-run.
 
 ## When something breaks or feels stuck
 
-Production is on Hetzner (`hetzner`, `/opt/linkedin-leads`). Read **`AGENTS.md` →
+Production is on Hetzner (`hetzner`, `/opt/jobhunt/src/apps/linkedin-leads`). Read **`AGENTS.md` →
 “When something breaks or feels stuck (operator playbook)”** for the full
 symptom → action table (session/VNC, sends gate, stale inbox, logs, pause
 sends, deploy drift).

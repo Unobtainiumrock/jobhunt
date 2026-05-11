@@ -3,7 +3,9 @@
 #
 # Canonical deploy entry point. Use this instead of retyping the one-liner.
 # Requires: SSH access to the `hetzner` host alias, and deploy-key auth on
-# /opt/linkedin-leads (set up via github-deploy SSH config + read-only GH key).
+# /opt/jobhunt/src (set up via github-deploy SSH config + read-only GH key).
+# linkedin-leads is one app inside the jobhunt monorepo; the live checkout is
+# /opt/jobhunt/src and this app lives at /opt/jobhunt/src/apps/linkedin-leads.
 #
 # Workflow:
 #   1. git push origin main              # ship code to GitHub
@@ -14,7 +16,7 @@
 set -euo pipefail
 
 ssh hetzner 'set -euo pipefail
-  cd /opt/linkedin-leads
+  cd /opt/jobhunt/src/apps/linkedin-leads
   echo ">>> git pull"
   git pull --ff-only
   echo ">>> docker compose up -d --build"

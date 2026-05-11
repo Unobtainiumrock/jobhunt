@@ -6,8 +6,8 @@ for future me. Read this first before making changes.
 ## TL;DR — How to deploy a code change
 
 Code runs in production on a Hetzner VM at `178.104.92.205` (SSH alias:
-`hetzner`), from `/opt/linkedin-leads` which is a git checkout that tracks
-`origin/main` on `github.com/Unobtainiumrock/linkedin-leads` (private).
+`hetzner`), from `/opt/jobhunt/src/apps/linkedin-leads` which is a git checkout that tracks
+`origin/main` on `github.com/Unobtainiumrock/jobhunt` (private).
 
 **Changing code is a TWO-step flow. Do BOTH or the change is only on the laptop:**
 
@@ -16,7 +16,7 @@ git push origin main    # 1. ship source to GitHub
 ./bin/deploy            # 2. pull + rebuild + restart on Hetzner
 ```
 
-`./bin/deploy` wraps `ssh hetzner 'cd /opt/linkedin-leads && git pull --ff-only
+`./bin/deploy` wraps `ssh hetzner 'cd /opt/jobhunt/src/apps/linkedin-leads && git pull --ff-only
 && docker compose up -d --build'`. The one-liner is idempotent and safe to
 re-run.
 
@@ -93,7 +93,7 @@ pointed at the same URL) for 24/7 coverage.
 ## Files you should NOT commit (gitignored, stay local/Hetzner-only)
 
 - `.env` — secrets + runtime flags. Both the laptop copy and
-  `/opt/linkedin-leads/.env` on Hetzner must stay in sync. Hand-sync via
+  `/opt/jobhunt/src/apps/linkedin-leads/.env` on Hetzner must stay in sync. Hand-sync via
   `scp` when values change, since git-pull won't touch it.
 - `profile/` — `user_profile.yaml` is personal; `repo_analysis.json` is
   generated.
@@ -103,9 +103,9 @@ pointed at the same URL) for 24/7 coverage.
 ## Cron (runs on the Hetzner host, not in Compose)
 
 ```
-0  */4 * * *   /opt/linkedin-leads/infra/cron.sh scrape
-10 */6 * * *   /opt/linkedin-leads/infra/cron.sh pipeline
-*/15 *  * * *  /opt/linkedin-leads/infra/cron.sh health
+0  */4 * * *   /opt/jobhunt/src/apps/linkedin-leads/infra/cron.sh scrape
+10 */6 * * *   /opt/jobhunt/src/apps/linkedin-leads/infra/cron.sh pipeline
+*/15 *  * * *  /opt/jobhunt/src/apps/linkedin-leads/infra/cron.sh health
 ```
 
 ## Safety rails already in the code (don't weaken these silently)
@@ -126,7 +126,7 @@ pointed at the same URL) for 24/7 coverage.
 
 ## Debugging pointers
 
-- Review UI not reachable: `ssh hetzner 'docker compose -f /opt/linkedin-leads/docker-compose.yml logs --tail=50 review'`.
+- Review UI not reachable: `ssh hetzner 'docker compose -f /opt/jobhunt/src/apps/linkedin-leads/docker-compose.yml logs --tail=50 review'`.
 - Telegram bot says "no drafts": check `inbox_classified.json` has the
   enrichment fields (`reply`, `stage`, `intent_tag`). `classify_leads.py`
   previously wiped these; the merge-carry-forward fix in `_SCRAPE_FIELDS`
@@ -139,16 +139,16 @@ pointed at the same URL) for 24/7 coverage.
 
 ## When something breaks or feels stuck (operator playbook)
 
-Use Hetzner, repo path `/opt/linkedin-leads`, `docker compose -f
-/opt/linkedin-leads/docker-compose.yml` (or `cd /opt/linkedin-leads && docker
+Use Hetzner, repo path `/opt/jobhunt/src/apps/linkedin-leads`, `docker compose -f
+/opt/jobhunt/src/apps/linkedin-leads/docker-compose.yml` (or `cd /opt/jobhunt/src/apps/linkedin-leads && docker
 compose`) unless you are debugging locally.
 
 | Symptom | What to do |
 |---------|------------|
 | **LinkedIn session expired / send failures / auth wall** | Telegram often surfaces this. Open VNC (`https://vnc.178-104-92-205.sslip.io/`, creds in `.env`), re-login in Chrome; session persists in `chrome-profile` volume. Retry approve or bulk send after. |
-| **Review UI unreachable** | `ssh hetzner 'cd /opt/linkedin-leads && docker compose logs --tail=80 review'`. Confirm Caddy on host; confirm `review` binds `127.0.0.1:3457` on the VM. |
+| **Review UI unreachable** | `ssh hetzner 'cd /opt/jobhunt/src/apps/linkedin-leads && docker compose logs --tail=80 review'`. Confirm Caddy on host; confirm `review` binds `127.0.0.1:3457` on the VM. |
 | **Telegram `/status` or `/list` looks empty / “no drafts”** | Usually `inbox_classified.json` lost enrichment (`reply`, `stage`, `intent_tag`) on a bad classify merge — see “Telegram bot says no drafts” above. Confirm `telegram_bot` and `review` share `app-data` volume and restarted after deploy. |
-| **Approves do not hit LinkedIn** | `docker compose exec -T review printenv LINKEDIN_SEND_ENABLED` — expect `1`. If `0`, set in `/opt/linkedin-leads/.env`, then `docker compose up -d review telegram_bot`. Another send may be holding `data/.send_approved.lock` (wait for in-flight send, or check stuck `send-approved` / Chrome). |
+| **Approves do not hit LinkedIn** | `docker compose exec -T review printenv LINKEDIN_SEND_ENABLED` — expect `1`. If `0`, set in `/opt/jobhunt/src/apps/linkedin-leads/.env`, then `docker compose up -d review telegram_bot`. Another send may be holding `data/.send_approved.lock` (wait for in-flight send, or check stuck `send-approved` / Chrome). |
 | **Pause all outbound (keep reviewing)** | Set `LINKEDIN_SEND_ENABLED=0` in `.env` (laptop + Hetzner), `scp` if needed, then `docker compose up -d review telegram_bot` (or `./bin/deploy`). |
 | **Data feels stale (you replied on LinkedIn but drafts disagree)** | Force refresh: `docker compose exec -T listener npm run inbox` (or wait for cron scrape). Then pipeline: `docker compose exec -T listener npm run pipeline` (or cron). `generate_reply --purge-stale` runs after pipeline in `infra/cron.sh`. |
 | **Pipeline / scrape errors** | `docker compose logs --tail=100 listener` and host logs under `/var/log/linkedin-leads/` from `infra/cron.sh`. OpenAI 429 → project spend limit (see above). Missing profile → `profile/user_profile.yaml` on server and in image context. |
@@ -162,4 +162,4 @@ compose`) unless you are debugging locally.
 - Setting up a GitHub Actions auto-deploy (requires storing an SSH key
   as a repo secret — security tradeoff owner should decide).
 - Deleting, rotating, or revoking the Hetzner deploy key (`hetzner-deploy-*`
-  on `Unobtainiumrock/linkedin-leads`).
+  on `Unobtainiumrock/jobhunt`).
