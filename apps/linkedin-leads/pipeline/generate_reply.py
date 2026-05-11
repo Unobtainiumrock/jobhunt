@@ -486,8 +486,15 @@ async def generate_reply_body(
     convo: dict[str, Any],
     profile: dict[str, Any],
     semaphore: asyncio.Semaphore,
+    slot_ctx: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Generate the dynamic body of a reply using LLM."""
+    """Generate the dynamic body of a reply using LLM.
+
+    ``slot_ctx`` shares per-run slot reservations across concurrent calls so
+    two ``ready_to_schedule`` conversations in the same pipeline run don't
+    race to the same time window. Shape: ``{"lock": asyncio.Lock(),
+    "reserved": set[str]}`` (canonical UTC ISO start times).
+    """
     async with semaphore:
         score_data = convo.get("score", {})
         highlights = score_data.get("profile_highlights", [])
@@ -534,8 +541,30 @@ async def generate_reply_body(
         # offering slots before knowing the city wastes a turn.
         if stage == "ready_to_schedule" and not ask_location:
             try:
-                from agents.calendar_agent import propose_slots
-                proposed_slots = propose_slots(duration_minutes=30, window_days=5)
+                from agents.calendar_agent import (
+                    _canonical_slot_key,
+                    propose_slots,
+                )
+                # Hold the shared lock while proposing + reserving so concurrent
+                # callers in the same pipeline run never observe the same free
+                # slots. Disk-side reservations were seeded into slot_ctx
+                # before the asyncio.gather block.
+                if slot_ctx is not None:
+                    async with slot_ctx["lock"]:
+                        proposed_slots = propose_slots(
+                            duration_minutes=30,
+                            window_days=5,
+                            excluded_starts=slot_ctx["reserved"],
+                        )
+                        for slot in proposed_slots:
+                            key = _canonical_slot_key(slot.get("start") or "")
+                            if key:
+                                slot_ctx["reserved"].add(key)
+                else:
+                    proposed_slots = propose_slots(
+                        duration_minutes=30,
+                        window_days=5,
+                    )
             except Exception as exc:  # pragma: no cover - calendar optional
                 proposed_slots = []
                 scheduling_block = (
@@ -1241,9 +1270,19 @@ async def generate_all_replies(
     client = AsyncOpenAI()
     semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
+    # Seed cross-call slot reservations: disk-side (slots already proposed to
+    # other still-open leads in earlier runs) + a shared mutable set guarded
+    # by an asyncio.Lock so concurrent ready_to_schedule convos in THIS run
+    # don't race to the same time window.
+    from agents.calendar_agent import collect_reserved_slot_starts
+    slot_ctx = {
+        "lock": asyncio.Lock(),
+        "reserved": collect_reserved_slot_starts(),
+    }
+
     t0 = time.time()
     tasks = [
-        generate_reply_body(client, c, profile, semaphore)
+        generate_reply_body(client, c, profile, semaphore, slot_ctx=slot_ctx)
         for c in recruiter_convos
     ]
     results = await asyncio.gather(*tasks)

@@ -36,6 +36,72 @@ SCOPES = ["https://www.googleapis.com/auth/calendar"]
 TOKEN_FILE = DATA_DIR / "google_token.json"
 CREDENTIALS_FILE = DATA_DIR / "google_credentials.json"
 BOOKINGS_FILE = DATA_DIR / "bookings.json"
+LEAD_STATE_FILE = DATA_DIR / "lead_states.json"
+
+# Lead-state values that release a slot for reuse. Anything else (e.g.
+# awaiting_response, awaiting_their_feedback) keeps the slot reserved.
+_RELEASED_LEAD_STATUSES = {"declined", "dead_end", "closed", "scheduled", "booked"}
+
+
+def _canonical_slot_key(start_iso: str) -> str | None:
+    """Normalise an ISO start time to UTC for set membership comparisons."""
+    try:
+        dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def collect_reserved_slot_starts(current_urn: str | None = None) -> set[str]:
+    """Return canonical UTC ISO start times already proposed to OTHER
+    active leads. Used by ``propose_slots`` to avoid suggesting the same
+    time window to multiple recruiters concurrently.
+
+    A slot is reserved if:
+      - it is in the future (past slots are free)
+      - the conversation it lives on is not the caller (``current_urn``)
+      - the conversation's lead state is not in
+        ``_RELEASED_LEAD_STATUSES`` (declined / dead_end / scheduled / etc.)
+    """
+    reserved: set[str] = set()
+    try:
+        with open(CLASSIFIED_FILE) as fh:
+            data = json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return reserved
+
+    lead_states: dict[str, Any] = {}
+    if LEAD_STATE_FILE.exists():
+        try:
+            with open(LEAD_STATE_FILE) as fh:
+                lead_states = json.load(fh) or {}
+        except json.JSONDecodeError:
+            lead_states = {}
+
+    now = datetime.now(timezone.utc)
+    for convo in data.get("conversations", []) or []:
+        urn = convo.get("conversationUrn")
+        if not urn or urn == current_urn:
+            continue
+        status = (lead_states.get(urn) or {}).get("status") or ""
+        if status in _RELEASED_LEAD_STATUSES:
+            continue
+        reply = convo.get("reply") or {}
+        for slot in reply.get("proposed_slots") or []:
+            start_iso = slot.get("start") if isinstance(slot, dict) else None
+            key = _canonical_slot_key(start_iso) if start_iso else None
+            if not key:
+                continue
+            try:
+                slot_dt = datetime.fromisoformat(key)
+            except ValueError:
+                continue
+            if slot_dt <= now:
+                continue
+            reserved.add(key)
+    return reserved
 
 
 def get_calendar_service() -> Any:
@@ -145,9 +211,10 @@ def _format_slot(slot: datetime) -> str:
 def propose_slots(
     duration_minutes: int = 30,
     window_days: int = 5,
-    slots_per_day: int = 2,
+    slots_per_day: int = 4,
     start_after: datetime | None = None,
     max_slots: int = 3,
+    excluded_starts: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Return up to `max_slots` candidate meeting times.
 
@@ -157,6 +224,11 @@ def propose_slots(
     Tries Google Calendar first (if credentials are configured); skips any slot
     overlapping a busy block. Falls back to a pure heuristic (next business-day
     10am/2pm windows) when Google Calendar is unavailable so callers never fail.
+
+    ``excluded_starts`` is a set of canonical UTC ISO start times that should
+    be skipped (slots already proposed to other recipients in this run or in
+    other still-open leads on disk). Use ``collect_reserved_slot_starts`` to
+    seed it with the disk-side reservations before the run.
     """
     start_after = start_after or datetime.now(timezone.utc) + timedelta(hours=4)
     candidates = _iter_candidate_slots(
@@ -193,9 +265,14 @@ def propose_slots(
                 return True
         return False
 
+    excluded = set(excluded_starts or [])
+
     proposals: list[dict[str, Any]] = []
     for slot in candidates:
         if used_google and _conflicts(slot):
+            continue
+        slot_key = _canonical_slot_key(slot.isoformat())
+        if slot_key and slot_key in excluded:
             continue
         end = slot + timedelta(minutes=duration_minutes)
         proposals.append({
