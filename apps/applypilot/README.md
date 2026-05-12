@@ -1,6 +1,30 @@
 <!-- logo here -->
 
-> **⚠️ ApplyPilot** is the original open-source project, created by [Pickle-Pixel](https://github.com/Pickle-Pixel) and first published on GitHub on **February 17, 2026**. We are **not affiliated** with applypilot.app, useapplypilot.com, or any other product using the "ApplyPilot" name. These sites are **not associated with this project** and may misrepresent what they offer. If you're looking for the autonomous, open-source job application agent — you're in the right place.
+> **⚠️ This is the BetterApplyPilot fork.** It lives inside the
+> [Unobtainiumrock/jobhunt](https://github.com/Unobtainiumrock/jobhunt)
+> monorepo at `apps/applypilot/`. The CLI command and PyPI package name
+> are both `applypilot` (inherited from upstream and never renamed).
+>
+> **Do NOT `pip install applypilot` from PyPI** — that pulls the
+> upstream `Pickle-Pixel/ApplyPilot` package and silently misses every
+> improvement in this fork (multi-mailbox Gmail, `--budget-per-job` /
+> `--budget-total` cost caps, per-job watchdog, Opus-4.7 default,
+> resumable mid-form progress, deterministic geo_fit eligibility, etc.).
+>
+> Install the fork via the monorepo install script:
+> ```bash
+> git clone https://github.com/Unobtainiumrock/jobhunt.git
+> cd jobhunt && ./install.sh
+> ```
+> See [the monorepo README](../../README.md) for the full install path
+> (laptop + optional VPS for the inbound side).
+
+> **⚠️ Original upstream attribution:** ApplyPilot is the upstream
+> open-source project, created by [Pickle-Pixel](https://github.com/Pickle-Pixel)
+> and first published on GitHub on **February 17, 2026**. We are **not
+> affiliated** with applypilot.app, useapplypilot.com, or any other
+> product using the "ApplyPilot" name. These sites are **not associated
+> with this project** and may misrepresent what they offer.
 
 # ApplyPilot
 
@@ -24,12 +48,16 @@ https://github.com/user-attachments/assets/7ee3417f-43d4-4245-9952-35df1e77f2df
 
 ApplyPilot is a 6-stage autonomous job application pipeline. It discovers jobs across 5+ boards, scores them against your resume with AI, tailors your resume per job, writes cover letters, and **submits applications for you**. It navigates forms, uploads documents, answers screening questions, all hands-free.
 
-Three commands. That's it.
+Two commands to install (this fork — NOT upstream PyPI):
 
 ```bash
-pip install applypilot
-pip install --no-deps python-jobspy && pip install pydantic tls-client requests markdownify regex
-applypilot init          # one-time setup: resume, profile, preferences, API keys
+git clone https://github.com/Unobtainiumrock/jobhunt.git
+cd jobhunt && ./install.sh
+```
+
+Then:
+
+```bash
 applypilot doctor        # verify your setup — shows what's installed and what's missing
 applypilot run           # discover > enrich > score > tailor > cover letters
 applypilot run -w 4      # same but parallel (4 threads for discovery/enrichment)
@@ -38,7 +66,15 @@ applypilot apply -w 3    # parallel apply (3 Chrome instances)
 applypilot apply --dry-run  # fill forms without submitting
 ```
 
-> **Why two install commands?** `python-jobspy` pins an exact numpy version in its metadata that conflicts with pip's resolver, but works fine at runtime with any modern numpy. The `--no-deps` flag bypasses the resolver; the second command installs jobspy's actual runtime dependencies. Everything except `python-jobspy` installs normally.
+> **Why a script and not `pip install`?** Because `pip install applypilot`
+> goes to PyPI and resolves to the upstream `Pickle-Pixel/ApplyPilot`
+> package — NOT this fork. The script editable-installs from your local
+> clone, guaranteeing you get the BetterApplyPilot improvements.
+>
+> The script also handles a `python-jobspy` quirk: jobspy pins an exact
+> numpy version in its metadata that conflicts with pip's resolver but
+> works fine at runtime. The script bypasses with `--no-deps` and
+> installs jobspy's actual runtime deps separately.
 
 ---
 

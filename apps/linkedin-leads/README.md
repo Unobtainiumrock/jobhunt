@@ -2,6 +2,13 @@
 
 An end-to-end system for scraping, classifying, scoring, and responding to LinkedIn recruiter messages. Starts with CDP-based inbox scraping and layers on LLM classification, profile-aware lead scoring, dynamic reply generation, follow-up scheduling, and a unified review UI for replies plus canonical workflow state.
 
+> **Install:** this app runs on a Linux VPS you bring (any provider —
+> Hetzner / DigitalOcean / Vultr / Lightsail / GCP / Linode). One-shot
+> setup from the monorepo root: `./setup-server.sh` (preflight-checks
+> resources, generates `.env`, brings up the docker compose stack with
+> noVNC desktop, installs host crons). See [the monorepo README](../../README.md#inbound-your-vps--linkedin-leads-docker-stack)
+> for the full install path.
+
 ## Unified Hunt Direction
 
 `linkedin-leads` is now the core of a broader job-hunt operating system, not just a recruiter inbox tool.

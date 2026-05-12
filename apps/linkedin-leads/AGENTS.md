@@ -5,9 +5,9 @@ for future me. Read this first before making changes.
 
 ## TL;DR — How to deploy a code change
 
-Code runs in production on a Hetzner VM at `178.104.92.205` (SSH alias:
-`hetzner`), from `/opt/jobhunt/src/apps/linkedin-leads` which is a git checkout that tracks
-`origin/main` on `github.com/Unobtainiumrock/jobhunt` (private).
+Code runs in production on a Hetzner VM (SSH alias: `hetzner`),
+from `/opt/jobhunt/src/apps/linkedin-leads` which is a git checkout that tracks
+`origin/main` on `github.com/Unobtainiumrock/jobhunt`.
 
 **Changing code is a TWO-step flow. Do BOTH or the change is only on the laptop:**
 
