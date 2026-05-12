@@ -343,6 +343,46 @@ HTML_TEMPLATE = """\
   }
   .pdf-modal-header strong { font-size: 0.95rem; }
   .pdf-modal-iframe { flex: 1; width: 100%; border: 0; border-radius: 8px; background: #fff; }
+  .kanban {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 0.6rem;
+    margin-bottom: 1.4rem;
+  }
+  .kanban-col {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.6rem;
+    min-height: 8rem;
+    display: flex; flex-direction: column;
+  }
+  .kanban-col.drag-over { border-color: var(--accent, #5aa9ff); background: color-mix(in srgb, var(--surface-2) 80%, var(--accent, #5aa9ff) 20%); }
+  .kanban-col-header {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 0.85rem; margin-bottom: 0.5rem;
+    padding-bottom: 0.4rem; border-bottom: 1px solid var(--border);
+  }
+  .kanban-col-body { display: flex; flex-direction: column; gap: 0.45rem; }
+  .kanban-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.55rem 0.65rem;
+    cursor: grab;
+    font-size: 0.85rem;
+  }
+  .kanban-card:active { cursor: grabbing; }
+  .kanban-card.dragging { opacity: 0.45; }
+  .kanban-card-title { font-weight: 600; margin-bottom: 0.15rem; }
+  .kanban-card-details { margin-top: 0.4rem; }
+  .kanban-card-details summary { font-size: 0.78rem; }
+  @media (max-width: 1100px) {
+    .kanban { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
+  @media (max-width: 640px) {
+    .kanban { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
 </style>
 </head>
 <body>
@@ -692,37 +732,69 @@ function renderWorkflow() {
   const tasks = state.workflow.tasks || [];
   const researchJobs = state.workflow.research_jobs || [];
 
-  const appCards = applications.length ? applications.map((item, i) => `
-    <div class="card">
-      <div class="card-header">
-        <div>
-          <div class="title">${item.company || '?'} / ${item.role_title || '?'}</div>
-          <div class="meta">${item.application_id}</div>
-        </div>
-        <span class="${badgeClass(item.status || 'planned')}">${item.status || 'planned'}</span>
+  const kanbanCols = ['drafting','submitted','screening','interviewing','offer','rejected'];
+  const colLabel = {drafting:'Drafting', submitted:'Submitted', screening:'Screening', interviewing:'Interviewing', offer:'Offer', rejected:'Rejected'};
+  const statusToCol = (s) => {
+    if (s === 'planned') return 'drafting';
+    if (s === 'withdrawn') return 'rejected';
+    return kanbanCols.includes(s) ? s : 'drafting';
+  };
+  window._appsById = Object.fromEntries(applications.map(a => [a.application_id, a]));
+
+  const renderKanbanCard = (item) => {
+    const id = item.application_id;
+    const subStatus = (item.status && item.status !== statusToCol(item.status)) ? ` <span class="meta">(${item.status})</span>` : '';
+    const phasedOut = item.phased_out_at ? `<div class="meta" style="color: var(--muted);">phased out ${_fmt_when(item.phased_out_at)}</div>` : '';
+    return `
+      <div class="kanban-card" draggable="true"
+           data-app-id="${id}"
+           ondragstart="kanbanDragStart(event, '${id}')"
+           ondragend="kanbanDragEnd(event)">
+        <div class="kanban-card-title">${_escape(item.company || '?')}${subStatus}</div>
+        <div class="meta">${_escape(item.role_title || '?')}</div>
+        ${phasedOut}
+        <details class="kanban-card-details">
+          <summary class="meta" style="cursor:pointer;">URL / deadline / notes</summary>
+          <div class="row" style="margin-top:0.4rem;">
+            <div style="grid-column: 1 / -1;">
+              <label>Application URL</label>
+              <input value="${_escape(item.application_url || '')}" placeholder="https://..."
+                     onblur="kanbanSaveField('${id}', 'application_url', this.value)">
+            </div>
+            <div style="grid-column: 1 / -1;">
+              <label>Deadline</label>
+              <input value="${_escape(item.deadline_at || '')}" placeholder="2026-04-20T17:00:00+00:00"
+                     onblur="kanbanSaveField('${id}', 'deadline_at', this.value)">
+            </div>
+          </div>
+          <div class="meta" style="margin-top:0.3rem;">submitted: ${_escape(item.submitted_at || 'not yet')}</div>
+          <div class="meta">id: ${_escape(id)}</div>
+        </details>
       </div>
-      <div class="meta">Submitted: ${item.submitted_at || 'not yet'}</div>
-      <div class="meta">URL: ${item.application_url || 'none'}</div>
-      <div class="row">
-        <div>
-          <label>Application URL</label>
-          <input id="app-url-${i}" value="${item.application_url || ''}" placeholder="https://...">
+    `;
+  };
+
+  const cardsByCol = Object.fromEntries(kanbanCols.map(c => [c, []]));
+  for (const app of applications) cardsByCol[statusToCol(app.status || 'planned')].push(app);
+
+  const appCards = applications.length ? `
+    <div class="kanban">
+      ${kanbanCols.map(c => `
+        <div class="kanban-col"
+             ondragover="kanbanDragOver(event, this)"
+             ondragleave="kanbanDragLeave(event, this)"
+             ondrop="kanbanDrop(event, '${c}', this)">
+          <div class="kanban-col-header">
+            <strong>${colLabel[c]}</strong>
+            <span class="meta">${cardsByCol[c].length}</span>
+          </div>
+          <div class="kanban-col-body">
+            ${cardsByCol[c].map(renderKanbanCard).join('') || '<div class="meta" style="opacity:0.5;font-size:0.78rem;">drop here</div>'}
+          </div>
         </div>
-        <div>
-          <label>Deadline</label>
-          <input id="app-deadline-${i}" value="${item.deadline_at || ''}" placeholder="2026-04-20T17:00:00+00:00">
-        </div>
-      </div>
-      <div class="actions">
-        <button class="btn btn-yellow" onclick="workflowAction({kind:'application_status', application_id:'${item.application_id}', status:'drafting', application_url:document.getElementById('app-url-${i}').value, deadline_at:document.getElementById('app-deadline-${i}').value})">Drafting</button>
-        <button class="btn btn-green" onclick="workflowAction({kind:'application_status', application_id:'${item.application_id}', status:'submitted', application_url:document.getElementById('app-url-${i}').value, deadline_at:document.getElementById('app-deadline-${i}').value})">Submitted</button>
-        <button class="btn btn-primary" onclick="workflowAction({kind:'application_status', application_id:'${item.application_id}', status:'screening', application_url:document.getElementById('app-url-${i}').value})">Screening</button>
-        <button class="btn btn-primary" onclick="workflowAction({kind:'application_status', application_id:'${item.application_id}', status:'interviewing', application_url:document.getElementById('app-url-${i}').value})">Interviewing</button>
-        <button class="btn btn-green" onclick="workflowAction({kind:'application_status', application_id:'${item.application_id}', status:'offer', application_url:document.getElementById('app-url-${i}').value})">Offer</button>
-        <button class="btn btn-red" onclick="workflowAction({kind:'application_status', application_id:'${item.application_id}', status:'rejected'})">Rejected</button>
-      </div>
+      `).join('')}
     </div>
-  `).join('') : '<div class="empty">No canonical applications yet.</div>';
+  ` : '<div class="empty">No canonical applications yet.</div>';
 
   const interviewCards = interviews.length ? interviews.map((item, i) => `
     <div class="card">
@@ -1224,6 +1296,57 @@ async function pollSendStatus() {
   } catch {
     _sendPollTimer = setTimeout(pollSendStatus, 5000);
   }
+}
+
+function kanbanDragStart(event, appId) {
+  event.dataTransfer.setData('text/plain', appId);
+  event.dataTransfer.effectAllowed = 'move';
+  event.currentTarget.classList.add('dragging');
+}
+function kanbanDragEnd(event) {
+  event.currentTarget.classList.remove('dragging');
+}
+function kanbanDragOver(event, col) {
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+  col.classList.add('drag-over');
+}
+function kanbanDragLeave(event, col) {
+  if (col.contains(event.relatedTarget)) return;
+  col.classList.remove('drag-over');
+}
+async function kanbanDrop(event, targetStatus, col) {
+  event.preventDefault();
+  col.classList.remove('drag-over');
+  const appId = event.dataTransfer.getData('text/plain');
+  if (!appId) return;
+  const app = (window._appsById || {})[appId];
+  if (!app) return;
+  const currentCol = (() => {
+    if (app.status === 'planned') return 'drafting';
+    if (app.status === 'withdrawn') return 'rejected';
+    return ['drafting','submitted','screening','interviewing','offer','rejected'].includes(app.status) ? app.status : 'drafting';
+  })();
+  if (currentCol === targetStatus) return;
+  await workflowAction({
+    kind: 'application_status',
+    application_id: appId,
+    status: targetStatus,
+    application_url: app.application_url || null,
+    deadline_at: app.deadline_at || null,
+  });
+}
+async function kanbanSaveField(appId, field, value) {
+  const app = (window._appsById || {})[appId];
+  if (!app) return;
+  if ((app[field] || '') === (value || '')) return;
+  await workflowAction({
+    kind: 'application_status',
+    application_id: appId,
+    status: app.status || 'drafting',
+    application_url: field === 'application_url' ? value : (app.application_url || null),
+    deadline_at: field === 'deadline_at' ? value : (app.deadline_at || null),
+  });
 }
 
 async function workflowAction(payload) {

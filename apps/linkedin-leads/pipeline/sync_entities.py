@@ -669,6 +669,7 @@ def _build_application(
             "deadline_at",
             "application_url",
             "notes",
+            "phased_out_at",
         ):
             if field in workflow_state:
                 application[field] = workflow_state[field]

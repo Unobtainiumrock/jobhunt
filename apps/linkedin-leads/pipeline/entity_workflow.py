@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -228,12 +228,54 @@ def _update_application_state(args: argparse.Namespace) -> dict[str, Any]:
     if args.deadline_at is not None:
         updated["deadline_at"] = args.deadline_at
 
+    if current.get("status") == "withdrawn" and args.status != "withdrawn":
+        updated.pop("phased_out_at", None)
+
     updated["updated_at"] = _now_iso()
     applications[application_id] = updated
     save_workflow_state(payload)
     return {
         "application_id": application_id,
         "state": updated,
+        "workflow_state_file": str(WORKFLOW_STATE_FILE),
+    }
+
+
+def auto_withdraw_stale(threshold_days: int = 21) -> dict[str, Any]:
+    """Sweep ``workflow_state.json``: applications in ``drafting`` whose
+    ``updated_at`` is older than ``threshold_days`` get flipped to
+    ``withdrawn`` with a ``phased_out_at`` timestamp. Idempotent — running
+    twice produces no further changes."""
+    payload = load_workflow_state()
+    applications = payload["applications"]
+    threshold = datetime.now(timezone.utc) - timedelta(days=threshold_days)
+    note_marker = f"phased out (no progress, {threshold_days}d)"
+    now = _now_iso()
+    withdrawn: list[str] = []
+    for app_id, app in applications.items():
+        if app.get("status") != "drafting":
+            continue
+        updated_at = app.get("updated_at")
+        if not updated_at:
+            continue
+        try:
+            ts = datetime.fromisoformat(updated_at)
+        except ValueError:
+            continue
+        if ts >= threshold:
+            continue
+        app["status"] = "withdrawn"
+        app["phased_out_at"] = now
+        existing = (app.get("notes") or "").strip()
+        if note_marker not in existing:
+            app["notes"] = f"{existing} | {note_marker}" if existing else note_marker
+        app["updated_at"] = now
+        withdrawn.append(app_id)
+    if withdrawn:
+        save_workflow_state(payload)
+    return {
+        "withdrawn": withdrawn,
+        "threshold_days": threshold_days,
         "workflow_state_file": str(WORKFLOW_STATE_FILE),
     }
 
@@ -569,6 +611,13 @@ def _build_parser() -> argparse.ArgumentParser:
     set_app_parser.add_argument("--deadline-at")
     set_app_parser.add_argument("--notes")
     set_app_parser.set_defaults(handler=_update_application_state)
+
+    auto_withdraw_parser = subparsers.add_parser(
+        "auto-withdraw-stale",
+        help="Sweep drafting applications older than --days and mark withdrawn",
+    )
+    auto_withdraw_parser.add_argument("--days", type=int, default=21)
+    auto_withdraw_parser.set_defaults(handler=lambda args: auto_withdraw_stale(args.days))
 
     set_loop_parser = subparsers.add_parser(
         "set-interview-loop-status",

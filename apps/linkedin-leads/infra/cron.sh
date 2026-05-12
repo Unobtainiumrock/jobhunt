@@ -65,6 +65,10 @@ run_pipeline() {
     # last run. Safe to run even when there's nothing stale.
     docker compose exec -T listener python -m pipeline.generate_reply --purge-stale \
         2>&1 | tee -a "$LOG_DIR/pipeline.log" || true
+    # Phase out applications stuck in 'drafting' for >21d so the workflow
+    # kanban does not accumulate dead cards. Idempotent.
+    docker compose exec -T listener python -m pipeline.entity_workflow auto-withdraw-stale --days 21 \
+        2>&1 | tee -a "$LOG_DIR/pipeline.log" || true
     log "cron pipeline: done"
 }
 
