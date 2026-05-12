@@ -299,6 +299,37 @@ HTML_TEMPLATE = """\
     textarea { font-size: 16px !important; }
     input, select { font-size: 16px !important; }
   }
+  .modal-backdrop {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.65);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100;
+  }
+  .modal-body {
+    background: var(--surface, #0f1827);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    max-width: 90vw; max-height: 90vh;
+    overflow: auto;
+    padding: 1.5rem;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+  }
+  .modal-close {
+    background: transparent; border: 1px solid var(--border);
+    color: var(--text); cursor: pointer;
+    padding: 0.3rem 0.7rem; border-radius: 8px;
+  }
+  .legend-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+  .legend-table th, .legend-table td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--border); }
+  .legend-table th { color: var(--muted); font-weight: 600; }
+  .help-icon {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 1.4rem; height: 1.4rem; border-radius: 50%;
+    border: 1px solid var(--border); color: var(--muted);
+    cursor: pointer; font-size: 0.8rem; user-select: none;
+    background: transparent;
+  }
+  .help-icon:hover { color: var(--text); border-color: var(--text); }
 </style>
 </head>
 <body>
@@ -331,8 +362,14 @@ let state = {
   applications: [],
   pipelineStats: { stages: {}, last_run: {}, score_distribution: [], recent_errors: [] },
   appFilter: 'all',
+  hideResolved: true,
   activeTab: 'replies',
 };
+
+function toggleHideResolved() {
+  state.hideResolved = document.getElementById('hide-resolved').checked;
+  renderReplies();
+}
 
 function badgeClass(status) {
   if (['approved', 'submitted', 'offer', 'completed', 'screening', 'interviewing', 'active', 'sent'].includes(status)) return 'badge badge-green';
@@ -503,7 +540,27 @@ function renderReplies() {
     return;
   }
 
-  container.innerHTML = toolbar + state.replies.map((convo, i) => {
+  const settledStatuses = ['approved', 'sent', 'rejected', 'abstained', 'manually_handled'];
+  const isSettledReply = (convo) => settledStatuses.includes((convo.reply || {}).status || 'draft');
+  const resolvedCount = state.replies.filter(isSettledReply).length;
+  const visibleCount = state.hideResolved ? state.replies.length - resolvedCount : state.replies.length;
+
+  const filterBar = `
+    <div class="actions" style="margin-bottom: 0.8rem; align-items: center;">
+      <label class="meta" style="cursor: pointer; display: inline-flex; align-items: center; gap: 0.4rem;">
+        <input type="checkbox" id="hide-resolved" ${state.hideResolved ? 'checked' : ''} onchange="toggleHideResolved()">
+        Hide resolved (${resolvedCount})
+      </label>
+    </div>
+  `;
+
+  if (!visibleCount) {
+    container.innerHTML = toolbar + filterBar + `<div class="empty">All ${state.replies.length} reply drafts are resolved. Uncheck "Hide resolved" to view them.</div>`;
+    return;
+  }
+
+  container.innerHTML = toolbar + filterBar + state.replies.map((convo, i) => {
+    if (state.hideResolved && isSettledReply(convo)) return '';
     const reply = convo.reply || {};
     const score = convo.score || {};
     const meta = convo.metadata || {};
@@ -852,6 +909,48 @@ function _filteredApplications() {
 
 function setAppFilter(f) { state.appFilter = f; renderApplications(); }
 
+const FILTER_LEGEND = {
+  'all':             'All applications regardless of state.',
+  'tailored+':       'Past scoring: tailored, ready, in_progress, or applied.',
+  'applied':         'Submitted to the company (applied_at is set).',
+  'ready':           'Tailored resume present AND application URL set AND not yet applied.',
+  'tailored':        'Has a tailored resume on disk (tailored_resume_path).',
+  'scored_eligible': 'fit_score >= 7 (passes the eligibility threshold).',
+  'scored_below':    'fit_score < 7 (below the eligibility threshold).',
+  'failed':          "apply_status in ('failed','captcha','login_issue','expired','manual').",
+  'in_progress':     "apply_status = 'in_progress' (apply automation actively running or paused mid-apply).",
+};
+
+function openModal(html) {
+  closeModal();
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.id = 'modal-backdrop';
+  backdrop.innerHTML = '<div class="modal-body" id="modal-body">' + html + '</div>';
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeModal(); });
+  document.body.appendChild(backdrop);
+  document.addEventListener('keydown', _modalKeyHandler);
+}
+function closeModal() {
+  const b = document.getElementById('modal-backdrop');
+  if (b) b.remove();
+  document.removeEventListener('keydown', _modalKeyHandler);
+}
+function _modalKeyHandler(e) { if (e.key === 'Escape') closeModal(); }
+
+function openFilterLegend() {
+  const rows = Object.entries(FILTER_LEGEND).map(([k, v]) =>
+    `<tr><td><code>${k}</code></td><td>${_escape(v)}</td></tr>`
+  ).join('');
+  openModal(`
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.8rem;gap:1rem;">
+      <strong>Application filter legend</strong>
+      <button class="modal-close" onclick="closeModal()">Close (Esc)</button>
+    </div>
+    <table class="legend-table"><thead><tr><th>Filter</th><th>Meaning</th></tr></thead><tbody>${rows}</tbody></table>
+  `);
+}
+
 function _escape(s) {
   if (s === null || s === undefined) return '';
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -874,12 +973,14 @@ function renderApplications() {
   const apps = _filteredApplications();
   const filters = ['all','tailored+','applied','ready','tailored','scored_eligible','scored_below','failed','in_progress'];
   const toolbar = `
-    <div class="toolbar" style="margin-bottom:1rem;display:flex;gap:0.4rem;flex-wrap:wrap;">
+    <div class="toolbar" style="margin-bottom:1rem;display:flex;gap:0.4rem;flex-wrap:wrap;align-items:center;">
       ${filters.map(f => `
         <button class="tab-btn ${state.appFilter === f ? 'active' : ''}"
                 style="padding:0.35rem 0.75rem;font-size:0.8rem"
+                title="${_escape(FILTER_LEGEND[f] || '')}"
                 onclick="setAppFilter('${f}')">${f}</button>
       `).join('')}
+      <button class="help-icon" title="What do these filters mean?" onclick="openFilterLegend()">?</button>
       <span class="muted" style="margin-left:auto;align-self:center;">${apps.length} of ${state.applications.length}</span>
     </div>
   `;
@@ -1481,7 +1582,7 @@ def _build_followups_payload() -> list[dict[str, Any]]:
         conversation = conversations.get(entry.get("conversation_id", ""), {}) or {}
         opportunity = opportunities.get(entry.get("opportunity_id", ""), {}) or {}
         participants = conversation.get("participants", []) or []
-        recipient = next(
+        recipient = entry.get("recipient_name") or next(
             (p.get("name", "") for p in participants if p.get("name") != USER_NAME),
             "Unknown",
         )

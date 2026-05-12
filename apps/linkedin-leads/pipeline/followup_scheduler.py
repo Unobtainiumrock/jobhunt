@@ -24,6 +24,7 @@ from typing import Any, Literal
 from openai import AsyncOpenAI
 
 from pipeline.config import (
+    LEADS_DIR,
     CONVERSATIONS_DIR,
     FOLLOWUP_1_DAYS,
     FOLLOWUP_2_DAYS,
@@ -378,6 +379,8 @@ async def generate_all_followups() -> None:
     client = AsyncOpenAI()
     semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
+    leads_by_id = {record["id"]: record for record in _load_records(LEADS_DIR)}
+
     # Hard cap at 2 follow-ups. Anything past #2 transitions to `cold` via the
     # `mark_cold` bucket above; we never draft a followup_3. This assertion
     # protects the bucket definition from silent drift.
@@ -406,12 +409,23 @@ async def generate_all_followups() -> None:
             print(f"  Follow-up {followup_number} for {label}:")
             print(f"    {result.get('message', '')[:100]}...")
 
+            recipient_name = next(
+                (p.get("name") for p in (convo.get("participants") or [])
+                 if p.get("name") and p.get("name") != USER_NAME),
+                None,
+            )
+            if not recipient_name:
+                lead = leads_by_id.get(task.get("lead_id"))
+                if lead:
+                    recipient_name = lead.get("name")
+
             queue["followups"].append({
                 "task_id": task["id"],
                 "opportunity_id": opp["id"],
                 "conversation_id": convo["id"],
                 "thread_id": thread_id,
                 "followup_number": followup_number,
+                "recipient_name": recipient_name,
                 "message": result.get("message", ""),
                 "referenced_quote": result.get("referenced_quote", ""),
                 "generated_at": datetime.now(timezone.utc).isoformat(),
