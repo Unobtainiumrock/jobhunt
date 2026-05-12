@@ -996,14 +996,14 @@ function setAppFilter(f) { state.appFilter = f; renderApplications(); }
 
 const FILTER_LEGEND = {
   'all':             'All applications regardless of state.',
-  'tailored+':       'Past scoring: tailored, ready, in_progress, or applied.',
+  'tailored+':       'Past scoring (union): tailored OR ready OR in_progress OR applied. Use this to find every row that ever scored eligible.',
   'applied':         'Submitted to the company (applied_at is set).',
-  'ready':           'Tailored resume present AND application URL set AND not yet applied.',
-  'tailored':        'Has a tailored resume on disk (tailored_resume_path).',
-  'scored_eligible': 'fit_score >= 7 (passes the eligibility threshold).',
-  'scored_below':    'fit_score < 7 (below the eligibility threshold).',
+  'ready':           'Currently in ready stage: tailored resume present AND application URL set AND not yet applied.',
+  'tailored':        'Currently in tailored stage: resume tailored but no application URL yet.',
+  'scored_eligible': 'Currently in scoring stage AND fit_score >= 7. Empty if all eligible rows have already advanced to tailored/ready/applied — use tailored+ for the union.',
+  'scored_below':    'Currently in scoring stage AND fit_score < 7.',
   'failed':          "apply_status in ('failed','captcha','login_issue','expired','manual').",
-  'in_progress':     "apply_status = 'in_progress' (apply automation actively running or paused mid-apply).",
+  'in_progress':     "Currently mid-apply: apply_status = 'in_progress'. Usually empty unless the apply automation is actively running (status transitions through quickly).",
 };
 
 function openModal(html) {
