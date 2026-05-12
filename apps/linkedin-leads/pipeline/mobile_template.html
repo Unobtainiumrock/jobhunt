@@ -479,17 +479,23 @@
   const commit = async (convo, action, text) => {
     const urn = convo.conversationUrn;
     notification(action === "approve" ? "success" : "warning");
+    // Optimistic advance: drop the top card immediately so the next draft
+    // appears while the server-side send finishes. The real LinkedIn send
+    // can take 5–30s synchronously inside _autosend_reply_after_approve;
+    // awaiting before advancing makes the UI feel stuck. Duplicate-send
+    // filter on the dispatcher (sent_at guard) makes spurious retries safe.
+    removeTop();
     try {
-      await fetch("/m/api/action", auth({
+      const resp = await fetch("/m/api/action", auth({
         method: "POST",
         body: JSON.stringify({ urn, action, text: text || "" }),
       }));
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
       toast(action === "approve" ? "Approved" : "Rejected");
     } catch (err) {
-      toast("Action failed");
+      toast("Action may have failed — check review UI");
       console.error(err);
     }
-    removeTop();
   };
 
   const skip = (convo) => {
