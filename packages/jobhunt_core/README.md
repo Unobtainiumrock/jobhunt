@@ -1,9 +1,9 @@
 # jobhunt-core
 
 Shared Python library for the unified job-hunt system. Consumed by both
-[`BetterApplyPilot`](https://github.com/Unobtainiumrock/BetterApplyPilot) (outbound
-automation) and [`linkedin-leads`](https://github.com/Unobtainiumrock/linkedin-leads)
-(inbound triage). Phase 4 of the job-hunt unification plan.
+[`apps/applypilot`](../../apps/applypilot/) (outbound automation) and
+[`apps/linkedin-leads`](../../apps/linkedin-leads/) (inbound triage),
+both of which now live in this monorepo. Phase 4 of the job-hunt unification plan.
 
 ## Scope
 

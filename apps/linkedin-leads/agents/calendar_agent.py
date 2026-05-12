@@ -167,6 +167,10 @@ def create_calendar_event(
 DEFAULT_WORKDAY_START_HOUR = 10  # 10:00 local
 DEFAULT_WORKDAY_END_HOUR = 17    # 17:00 local
 DEFAULT_LOCAL_TIMEZONE = "America/Los_Angeles"
+# Hours to never propose as meeting starts (lunchtime). With step=60 from
+# 10:00 the natural slot grid lands on 12:00 and 13:00; skip both so the
+# proposals read better to recruiters.
+LUNCH_HOURS_SKIP: set[int] = {12, 13}
 
 
 def _iter_candidate_slots(
@@ -193,7 +197,7 @@ def _iter_candidate_slots(
             emitted_today = 0
             t = base
             while t.hour < day_end_hour and emitted_today < slots_per_day:
-                if t > start_after:
+                if t > start_after and t.hour not in LUNCH_HOURS_SKIP:
                     candidates.append(t)
                     emitted_today += 1
                 t += timedelta(minutes=step)

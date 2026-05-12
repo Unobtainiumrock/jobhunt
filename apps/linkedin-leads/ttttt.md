@@ -90,9 +90,9 @@ docker compose version
 ### Step 4: Clone and configure
 
 ```bash
-# Clone your repo (private)
-git clone git@github.com:Unobtainiumrock/linkedin-leads.git
-cd linkedin-leads
+# Clone your repo (private). linkedin-leads now lives inside the jobhunt monorepo.
+git clone git@github.com:Unobtainiumrock/jobhunt.git
+cd jobhunt/apps/linkedin-leads
 
 # Create your .env from the template
 cp .env.example .env

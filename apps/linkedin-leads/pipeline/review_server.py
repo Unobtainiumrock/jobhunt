@@ -2054,7 +2054,15 @@ class ReviewHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps(payload, indent=2).encode())
+        try:
+            self.wfile.write(json.dumps(payload, indent=2).encode())
+        except (BrokenPipeError, ConnectionResetError):
+            # Client (typically Telegram WebView or healthdog probe)
+            # disconnected before we finished writing. Idempotent endpoints
+            # — the next probe will retry. Log at INFO instead of letting
+            # the BaseHTTPRequestHandler emit a 30-line traceback.
+            self.log_message("client disconnected mid-write: %s %s",
+                             self.command, self.path)
 
 
 def _port_available(host: str, port: int) -> bool:
