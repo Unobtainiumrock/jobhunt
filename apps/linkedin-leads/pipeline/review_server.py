@@ -330,6 +330,19 @@ HTML_TEMPLATE = """\
     background: transparent;
   }
   .help-icon:hover { color: var(--text); border-color: var(--text); }
+  .link-btn {
+    background: transparent; border: none;
+    color: var(--accent, #5aa9ff); cursor: pointer;
+    padding: 0; font: inherit; text-decoration: underline;
+  }
+  .link-btn:hover { color: var(--text); }
+  .pdf-modal-body { width: 80vw; height: 85vh; display: flex; flex-direction: column; }
+  .pdf-modal-header {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 1rem; margin-bottom: 0.6rem;
+  }
+  .pdf-modal-header strong { font-size: 0.95rem; }
+  .pdf-modal-iframe { flex: 1; width: 100%; border: 0; border-radius: 8px; background: #fff; }
 </style>
 </head>
 <body>
@@ -938,6 +951,23 @@ function closeModal() {
 }
 function _modalKeyHandler(e) { if (e.key === 'Escape') closeModal(); }
 
+function openPdfModal(url, label) {
+  const safeUrl = _escape(url);
+  const safeLabel = _escape(label || 'PDF');
+  openModal(`
+    <div class="pdf-modal-body">
+      <div class="pdf-modal-header">
+        <strong>${safeLabel}</strong>
+        <div style="display:flex;gap:0.5rem;">
+          <a href="${safeUrl}" target="_blank" class="link-btn">Open in new tab</a>
+          <button class="modal-close" onclick="closeModal()">Close (Esc)</button>
+        </div>
+      </div>
+      <iframe class="pdf-modal-iframe" src="${safeUrl}"></iframe>
+    </div>
+  `);
+}
+
 function openFilterLegend() {
   const rows = Object.entries(FILTER_LEGEND).map(([k, v]) =>
     `<tr><td><code>${k}</code></td><td>${_escape(v)}</td></tr>`
@@ -1011,8 +1041,8 @@ function renderApplications() {
             <td style="padding:0.5rem;">${_escape(a.title)}</td>
             <td style="padding:0.5rem;color:var(--muted);">${_escape(a.location)}</td>
             <td style="padding:0.5rem;"><span class="${_appStatusClass(a.status)}">${a.status}</span></td>
-            <td style="padding:0.5rem;">${a.tailored_resume_url ? `<a href="${a.tailored_resume_url}" target="_blank" style="color:var(--accent);">PDF</a>` : '—'}</td>
-            <td style="padding:0.5rem;">${a.cover_letter_url ? `<a href="${a.cover_letter_url}" target="_blank" style="color:var(--accent);">PDF</a>` : '—'}</td>
+            <td style="padding:0.5rem;">${a.tailored_resume_url ? `<button class="link-btn" onclick="openPdfModal('${a.tailored_resume_url}','Resume')">PDF</button>` : '—'}</td>
+            <td style="padding:0.5rem;">${a.cover_letter_url ? `<button class="link-btn" onclick="openPdfModal('${a.cover_letter_url}','Cover letter')">PDF</button>` : '—'}</td>
             <td style="padding:0.5rem;">${a.application_url ? `<a href="${_escape(a.application_url)}" target="_blank" style="color:var(--muted);">↗</a>` : ''}</td>
             <td style="padding:0.5rem;color:var(--muted);" title="${_escape(a.applied_at || a.tailored_at || a.discovered_at || '')}">${_fmt_when(a.applied_at || a.tailored_at || a.discovered_at)}</td>
           </tr>
@@ -1258,16 +1288,22 @@ def _pdf_link(field_value: str | None, kind: str) -> str | None:
     """Map a container-side ``/data/tailored_resumes/foo.pdf`` (or host
     equivalent) to the ``/jobhunt/<kind>/foo.pdf`` URL this server serves.
 
-    Returns None if the referenced file isn't actually on disk — the UI
-    skips the link rather than producing a broken 404.
+    BAP's ``tailored_resume_path`` / ``cover_letter_path`` columns store the
+    ``.txt`` source path (see applypilot/.../tailor.py); the ``.pdf`` is
+    generated as a sibling but never recorded in the DB. Prefer ``.pdf`` when
+    it exists so the UI renders a real document; fall back to the literal
+    stored path. Returns None if neither file is on disk.
     """
     if not field_value:
         return None
     name = Path(field_value).name
     base = JOBHUNT_RESUMES_DIR if kind == "resume" else JOBHUNT_COVERS_DIR
-    if not (base / name).exists():
-        return None
-    return f"/jobhunt/{kind}/{name}"
+    pdf_name = Path(name).with_suffix(".pdf").name
+    if (base / pdf_name).exists():
+        return f"/jobhunt/{kind}/{pdf_name}"
+    if (base / name).exists():
+        return f"/jobhunt/{kind}/{name}"
+    return None
 
 
 def _build_applications_payload() -> list[dict[str, Any]]:
