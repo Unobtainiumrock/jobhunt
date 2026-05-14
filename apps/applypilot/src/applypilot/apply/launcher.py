@@ -723,6 +723,33 @@ def run_job(job: dict, port: int, worker_id: int = 0,
         def _clean_reason(s: str) -> str:
             return re.sub(r'[*`"]+$', '', s).strip()
 
+        # Already-applied dedup detection — agent saw a prior-application
+        # banner on the page before clicking Apply. Closes the BAP↔ATS sync
+        # gap surfaced 2026-05-12 (project_applypilot_bap_sync_gap memory).
+        # Token format: RESULT:ALREADY_APPLIED:<YYYY-MM-DD or 'unknown'>
+        if "RESULT:ALREADY_APPLIED" in output:
+            inferred_date = "unknown"
+            for out_line in output.split("\n"):
+                if "RESULT:ALREADY_APPLIED" in out_line:
+                    parts = out_line.split("RESULT:ALREADY_APPLIED:")
+                    if len(parts) > 1:
+                        inferred_date = _clean_reason(parts[-1]) or "unknown"
+                    break
+            add_event(f"[W{worker_id}] ALREADY_APPLIED ({inferred_date}): {job['title'][:30]}")
+            update_state(worker_id, status="applied",
+                         last_action=f"backfilled_dedup ({inferred_date})")
+            # Use mark_result for the applied bookkeeping, then patch in the
+            # forensic marker so the dashboard can distinguish today's apply
+            # from a backfilled detection.
+            mark_result(job["url"], "applied", duration_ms=duration_ms)
+            conn = get_connection()
+            conn.execute(
+                "UPDATE jobs SET apply_error = ? WHERE url = ?",
+                (f"backfilled_dedup_{inferred_date}", job["url"]),
+            )
+            conn.commit()
+            return "applied", duration_ms, _cost()
+
         for result_status in ["APPLIED", "EXPIRED", "CAPTCHA", "LOGIN_ISSUE"]:
             if f"RESULT:{result_status}" in output:
                 add_event(f"[W{worker_id}] {result_status} ({elapsed}s): {job['title'][:30]}")

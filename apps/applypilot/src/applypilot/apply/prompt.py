@@ -681,6 +681,12 @@ signal; without them a retry starts over.
 1. browser_navigate to the job URL.
 2. browser_snapshot to read the page. Then run CAPTCHA DETECT (see CAPTCHA section). If a CAPTCHA is found, solve it before continuing.
 3. LOCATION CHECK. Read the page for location info. If not eligible, output RESULT and stop.
+3a. ALREADY-APPLIED CHECK. Scan the snapshot for any of these signals BEFORE clicking Apply:
+   - Workday/SAP/Greenhouse banner: "You applied for this job on <date>", "View Application", "View My Applications"
+   - LinkedIn: "Applied <N> <unit> ago" badge near the Apply button, "View application" replacing the Apply button
+   - Greenhouse/Lever: "You've already applied to this job" or "Application Submitted on <date>"
+   If ANY such signal is present, STOP. Output: RESULT:ALREADY_APPLIED:<YYYY-MM-DD or 'unknown'>
+   Do NOT click Apply, do NOT sign in further, do NOT fill any form. This closes the BAP↔ATS sync gap — your apply_status column in BAP did not know about a prior manual application, and we are backfilling.
 4. Find and click the Apply button. If email-only (page says "email resume to X"):
    - send_email with subject "Application for {job['title']} -- {display_name}", body = 2-3 sentence pitch + contact info, attach resume PDF: ["{pdf_path}"]
    - Output RESULT:APPLIED. Done.
