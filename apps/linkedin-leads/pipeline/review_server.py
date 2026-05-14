@@ -374,6 +374,11 @@ HTML_TEMPLATE = """\
   }
   .kanban-card:active { cursor: grabbing; }
   .kanban-card.dragging { opacity: 0.45; }
+  .kanban-card-orphan {
+    border-style: dashed;
+    border-color: color-mix(in srgb, var(--red, #d04848) 60%, var(--border) 40%);
+    background: color-mix(in srgb, var(--surface) 92%, var(--red, #d04848) 8%);
+  }
   .kanban-card-title { font-weight: 600; margin-bottom: 0.15rem; }
   .kanban-card-details { margin-top: 0.4rem; }
   .kanban-card-details summary { font-size: 0.78rem; }
@@ -745,12 +750,13 @@ function renderWorkflow() {
     const id = item.application_id;
     const subStatus = (item.status && item.status !== statusToCol(item.status)) ? ` <span class="meta">(${item.status})</span>` : '';
     const phasedOut = item.phased_out_at ? `<div class="meta" style="color: var(--muted);">phased out ${_fmt_when(item.phased_out_at)}</div>` : '';
+    const orphanTag = item.is_orphan ? ' <span class="meta" style="color: var(--red); font-weight:600;" title="Underlying opportunity was pruned. Workflow state preserved here; drag still works but the lead/conversation backing this card is gone.">[orphan]</span>' : '';
     return `
-      <div class="kanban-card" draggable="true"
+      <div class="kanban-card${item.is_orphan ? ' kanban-card-orphan' : ''}" draggable="true"
            data-app-id="${id}"
            ondragstart="kanbanDragStart(event, '${id}')"
            ondragend="kanbanDragEnd(event)">
-        <div class="kanban-card-title">${_escape(item.company || '?')}${subStatus}</div>
+        <div class="kanban-card-title">${_escape(item.company || '?')}${subStatus}${orphanTag}</div>
         <div class="meta">${_escape(item.role_title || '?')}</div>
         ${phasedOut}
         <details class="kanban-card-details">
@@ -1586,6 +1592,7 @@ def _build_workflow_payload() -> dict[str, Any]:
     prep_artifacts = {record["id"]: record for record in _load_records(PREP_ARTIFACTS_DIR)}
     queue = _load_queue()
     applications = []
+    existing_app_ids: set[str] = set()
     for application in _load_records(APPLICATIONS_DIR):
         opportunity = opportunities.get(application.get("opportunity_id"), {})
         applications.append({
@@ -1598,6 +1605,39 @@ def _build_workflow_payload() -> dict[str, Any]:
             "application_url": application.get("application_url"),
             "deadline_at": application.get("deadline_at"),
             "notes": application.get("notes"),
+            "is_orphan": False,
+        })
+        existing_app_ids.add(application["id"])
+
+    # Surface orphan workflow_state.applications entries — these arise when
+    # sync_entities prunes the underlying opportunity (e.g. user marked the
+    # lead dead in the recruiter dashboard) but workflow_state retains the
+    # historical kanban state. Without this surfacing the cards vanish from
+    # the UI silently and the user loses their drag-applied status changes.
+    # (PF a5962706 fix, 2026-05-14.)
+    ws_apps = (load_workflow_state().get("applications") or {})
+    for app_id, ws_data in ws_apps.items():
+        if app_id in existing_app_ids:
+            continue
+        # Try to humanize the opportunity slug from the id for visual hint.
+        # Id shape: "app_opp-<slug-with-hash>_<hash>" — extract the slug.
+        humanized = None
+        if app_id.startswith("app_opp-"):
+            slug = app_id[len("app_opp-"):].rsplit("_", 1)[0]
+            slug = slug.rsplit("-", 1)[0]  # drop trailing hash chunk
+            humanized = slug.replace("-", " ").strip().title() or None
+        applications.append({
+            "application_id": app_id,
+            "opportunity_id": None,
+            "company": humanized,
+            "role_title": "(orphan — underlying opportunity pruned)",
+            "status": ws_data.get("status") or "drafting",
+            "submitted_at": ws_data.get("submitted_at"),
+            "application_url": ws_data.get("application_url"),
+            "deadline_at": ws_data.get("deadline_at"),
+            "notes": ws_data.get("notes"),
+            "is_orphan": True,
+            "phased_out_at": ws_data.get("phased_out_at"),
         })
 
     interview_loops = []
