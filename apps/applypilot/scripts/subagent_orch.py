@@ -175,6 +175,7 @@ def cmd_list_score(args: argparse.Namespace) -> None:
             SELECT url, title, site, location, full_description, fit_score
             FROM jobs
             WHERE full_description IS NOT NULL AND fit_score IS NULL
+              AND (geo_fit IS NULL OR geo_fit != 'fully_ineligible')
             ORDER BY ({case_expr}) ASC, discovered_at DESC
             LIMIT ?
             """,
@@ -209,8 +210,24 @@ def cmd_list_score(args: argparse.Namespace) -> None:
 
 def cmd_list_tailor(args: argparse.Namespace) -> None:
     conn = get_connection()
-    jobs = get_jobs_by_stage(conn, stage="pending_tailor",
-                             min_score=args.min_score, limit=args.limit)
+    # get_jobs_by_stage("pending_tailor") doesn't filter geo_fit; do it
+    # here so geo-ineligible rows (Canada/EMEA/etc) don't waste tailor
+    # cycles. Lesson learned 2026-05-14 from GitLab EMEA + 2× BDO Canada
+    # tailor false positives.
+    rows = conn.execute(
+        """
+        SELECT url, title, site, location, full_description, fit_score
+        FROM jobs
+        WHERE fit_score >= ? AND full_description IS NOT NULL
+          AND tailored_resume_path IS NULL
+          AND COALESCE(tailor_attempts, 0) < 5
+          AND (geo_fit IS NULL OR geo_fit != 'fully_ineligible')
+        ORDER BY fit_score DESC, discovered_at DESC
+        LIMIT ?
+        """,
+        (args.min_score, args.limit),
+    ).fetchall()
+    jobs = [dict(r) for r in rows]
     resume_text = _resume_text()
     profile = load_profile()
     profile_excerpt = _profile_excerpt(profile)
@@ -248,6 +265,7 @@ def cmd_list_cover(args: argparse.Namespace) -> None:
           AND (cover_letter_path IS NULL OR cover_letter_path = '')
           AND COALESCE(cover_attempts, 0) < 5
           AND fit_score >= ?
+          AND (geo_fit IS NULL OR geo_fit != 'fully_ineligible')
         ORDER BY fit_score DESC, url
         LIMIT ?
         """,
