@@ -144,16 +144,21 @@ def _store(conn, jobs: list[dict], site_default: str) -> tuple[int, int]:
         if not u:
             continue
         try:
+            # Lever's hostedUrl IS the application URL — set both fields
+            # so apply pipeline doesn't skip these rows on application_url
+            # IS NOT NULL filter.
             conn.execute(
                 """
-                INSERT INTO jobs (url, title, salary, description, location,
-                                  site, strategy, discovered_at,
-                                  full_description, detail_scraped_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO jobs (url, application_url, title, salary,
+                                  description, location, site, strategy,
+                                  discovered_at, full_description,
+                                  detail_scraped_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    u, job.get("title"), job.get("salary"), job.get("description"),
-                    job.get("location"), job.get("site") or site_default,
+                    u, u, job.get("title"), job.get("salary"),
+                    job.get("description"), job.get("location"),
+                    job.get("site") or site_default,
                     job.get("strategy") or "lever_api", now,
                     job.get("full_description"), now,
                 ),

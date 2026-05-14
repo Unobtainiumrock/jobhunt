@@ -162,16 +162,21 @@ def _store_with_full_desc(conn, jobs: list[dict], site_default: str) -> tuple[in
         if not u:
             continue
         try:
+            # For Greenhouse, `url` IS the application URL. Set both fields
+            # so downstream apply pipeline (which filters on application_url
+            # IS NOT NULL) doesn't skip these rows.
             conn.execute(
                 """
-                INSERT INTO jobs (url, title, salary, description, location,
-                                  site, strategy, discovered_at,
-                                  full_description, detail_scraped_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO jobs (url, application_url, title, salary,
+                                  description, location, site, strategy,
+                                  discovered_at, full_description,
+                                  detail_scraped_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    u, job.get("title"), job.get("salary"), job.get("description"),
-                    job.get("location"), job.get("site") or site_default,
+                    u, u, job.get("title"), job.get("salary"),
+                    job.get("description"), job.get("location"),
+                    job.get("site") or site_default,
                     job.get("strategy") or "greenhouse_api", now,
                     job.get("full_description"), now,
                 ),
