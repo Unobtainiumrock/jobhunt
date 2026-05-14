@@ -41,6 +41,14 @@ blocked:
     # Most Canadian Workday tenant URLs are hybrid Toronto/Ottawa roles
     # requiring Canadian auth — not feasible without sponsorship.
     - "%myworkdayjobs.com%/Canada-%"
+    # Thomson Reuters CoCounsel / Materia roles: active Lead SWE-AI
+    # conversation with Miguel Lumapat on the Materia team. Double-applying
+    # via the public Workday tenant would create parallel ATS threads and
+    # step on that recruiter's pipeline. Block until that conversation
+    # resolves. Surgical — only TR CoCounsel/Materia; other TR roles still
+    # in scope.
+    - "%thomsonreuters.wd5.myworkdayjobs.com%CoCounsel%"
+    - "%thomsonreuters.wd5.myworkdayjobs.com%Materia%"
 
 # ── Blocked SSO domains — cannot authenticate through these ──────────────
 blocked_sso:
