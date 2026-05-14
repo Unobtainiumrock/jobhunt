@@ -155,7 +155,34 @@ def _resume_text() -> str:
 
 def cmd_list_score(args: argparse.Namespace) -> None:
     conn = get_connection()
-    jobs = get_jobs_by_stage(conn, stage="pending_score", limit=args.limit)
+    if args.prefer_titles:
+        # Bypass get_jobs_by_stage so we can prioritize rows whose title
+        # matches the user's target_roles. Without this, scoring grinds
+        # through ~80% of generic SWE / unrelated titles before reaching
+        # the ~370 likely-high-fit candidates in the pool.
+        terms = [t.strip().lower() for t in args.prefer_titles.split(",") if t.strip()]
+        # Build a CASE that assigns priority rank by title match — earlier
+        # terms in the list win ties.
+        case_expr = "CASE"
+        params: list = []
+        for i, term in enumerate(terms):
+            case_expr += " WHEN lower(title) LIKE ? THEN ?"
+            params += [f"%{term}%", i]
+        case_expr += f" ELSE {len(terms)} END"
+        params.append(args.limit)
+        rows = conn.execute(
+            f"""
+            SELECT url, title, site, location, full_description, fit_score
+            FROM jobs
+            WHERE full_description IS NOT NULL AND fit_score IS NULL
+            ORDER BY ({case_expr}) ASC, discovered_at DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        jobs = [dict(r) for r in rows]
+    else:
+        jobs = get_jobs_by_stage(conn, stage="pending_score", limit=args.limit)
     resume_text = _resume_text()
     out = []
     for job in jobs:
@@ -379,6 +406,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     lp = sub.add_parser("list-score")
     lp.add_argument("--limit", type=int, default=10)
+    lp.add_argument(
+        "--prefer-titles",
+        default="",
+        help=(
+            "Comma-separated lowercase substrings to prioritize in title "
+            "matching. Earlier terms win ties. Example: "
+            "'ai engineer,agent,ml engineer,founding,applied scientist'."
+        ),
+    )
     lp.set_defaults(func=cmd_list_score)
 
     ap = sub.add_parser("apply-score")
