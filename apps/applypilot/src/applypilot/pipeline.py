@@ -73,7 +73,7 @@ def _run_discover(workers: int = 1, skip_recent_hours: float = 0) -> dict:
         get_connection, record_source_run, should_skip_source,
     )
 
-    stats: dict = {"jobspy": None, "workday": None, "smartextract": None}
+    stats: dict = {"jobspy": None, "workday": None, "greenhouse": None, "lever": None, "smartextract": None}
     conn = get_connection()
 
     def _run(source: str, label: str, fn):
@@ -102,6 +102,12 @@ def _run_discover(workers: int = 1, skip_recent_hours: float = 0) -> dict:
 
     from applypilot.discovery.workday import run_workday_discovery
     _run("workday", "Workday corporate scraper", lambda: run_workday_discovery(workers=workers))
+
+    from applypilot.discovery.greenhouse import run_greenhouse_discovery
+    _run("greenhouse", "Greenhouse public API", lambda: run_greenhouse_discovery(workers=workers))
+
+    from applypilot.discovery.lever import run_lever_discovery
+    _run("lever", "Lever public API", lambda: run_lever_discovery(workers=workers))
 
     from applypilot.discovery.smartextract import run_smart_extract
     _run("smartextract", "Smart extract (AI-powered scraping)", lambda: run_smart_extract(workers=workers))

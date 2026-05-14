@@ -1,0 +1,112 @@
+# Greenhouse Job Board Tokens
+#
+# Public Greenhouse boards are accessible at
+#   https://boards-api.greenhouse.io/v1/boards/<token>/jobs
+# Token is usually the company's lowercase name. Some companies are on
+# Greenhouse but disable public board access — those won't return rows.
+#
+# Curated 2026-05-14 to seed Greenhouse discovery for applypilot. Bias is
+# AI/ML startups and growth-stage tech where mid-level IC roles cluster.
+# Add new entries as you discover them via greenhouse-flavored apply URLs.
+
+greenhouse_boards:
+
+  # ── Foundation-model / AI labs ─────────────────────────────────────────
+  - token: anthropic
+    name: Anthropic
+
+  - token: huggingface
+    name: Hugging Face
+
+  # ── AI-native products + dev tools ─────────────────────────────────────
+  - token: notion
+    name: Notion
+
+  - token: linear
+    name: Linear
+
+  - token: replit
+    name: Replit
+
+  - token: vercel
+    name: Vercel
+
+  - token: airtable
+    name: Airtable
+
+  - token: figma
+    name: Figma
+
+  - token: retool
+    name: Retool
+
+  - token: supabase
+    name: Supabase
+
+  - token: gitlab
+    name: GitLab
+
+  - token: pineconeio
+    name: Pinecone
+
+  - token: weaviate
+    name: Weaviate
+
+  # ── Fintech (Goodfin-adjacent, the actual fit zone) ────────────────────
+  - token: ramp
+    name: Ramp
+
+  - token: brex
+    name: Brex
+
+  - token: stripe
+    name: Stripe
+
+  - token: plaid
+    name: Plaid
+
+  - token: mercury
+    name: Mercury
+
+  - token: chime
+    name: Chime
+
+  - token: robinhood
+    name: Robinhood
+
+  - token: coinbase
+    name: Coinbase
+
+  # ── Larger AI-heavy tech ───────────────────────────────────────────────
+  - token: databricks
+    name: Databricks
+
+  - token: snowflake
+    name: Snowflake
+
+  - token: mongodb
+    name: MongoDB
+
+  - token: elastic
+    name: Elastic
+
+  - token: datadog
+    name: Datadog
+
+  - token: twilio
+    name: Twilio
+
+  - token: segment
+    name: Segment
+
+  - token: discord
+    name: Discord
+
+  - token: doordash
+    name: DoorDash
+
+  - token: instacart
+    name: Instacart
+
+  - token: instawork
+    name: Instawork

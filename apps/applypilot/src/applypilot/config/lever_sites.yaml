@@ -1,0 +1,48 @@
+# Lever Public-API Site Slugs
+#
+# Public Lever postings are accessible at
+#   https://api.lever.co/v0/postings/<site>?mode=json
+# Slug is the company's identifier in Lever. Many tech companies migrated
+# from Lever to Greenhouse, so this list is smaller than Greenhouse.
+#
+# Curated 2026-05-14. Add entries as you discover Lever-hosted careers
+# pages (the apply URL usually contains `jobs.lever.co/<site>` or
+# redirects to one).
+
+lever_sites:
+
+  # ── AI / ML / data ─────────────────────────────────────────────────────
+  - slug: netflix
+    name: Netflix
+
+  - slug: weights-and-biases
+    name: Weights & Biases
+
+  - slug: lambdal
+    name: Lambda Labs
+
+  - slug: scaleai
+    name: Scale AI
+
+  - slug: rivian
+    name: Rivian
+
+  - slug: cohere
+    name: Cohere
+
+  # ── Fintech / payments ─────────────────────────────────────────────────
+  - slug: gusto
+    name: Gusto
+
+  - slug: getmaple
+    name: Maple
+
+  # ── Other tech that hosts on Lever ─────────────────────────────────────
+  - slug: hellosign
+    name: HelloSign / Dropbox Sign
+
+  - slug: glean
+    name: Glean
+
+  - slug: figma
+    name: Figma (Lever fallback)
